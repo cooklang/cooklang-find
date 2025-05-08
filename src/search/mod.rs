@@ -17,7 +17,7 @@ pub enum SearchError {
     PatternError(#[from] glob::PatternError),
 
     #[error("Failed to process recipe: {0}")]
-    RecipeError(#[from] crate::recipe::RecipeError),
+    RecipeError(#[from] crate::RecipeError),
 
     #[error("Failed to read file: {0}")]
     IoError(#[from] std::io::Error),

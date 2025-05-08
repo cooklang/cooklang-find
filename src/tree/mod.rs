@@ -1,4 +1,4 @@
-use crate::recipe::RecipeEntry;
+use crate::RecipeEntry;
 use glob::glob;
 use std::path::Path;
 use thiserror::Error;
@@ -21,7 +21,7 @@ pub enum TreeError {
     PatternError(#[from] glob::PatternError),
 
     #[error("Failed to process recipe: {0}")]
-    RecipeError(#[from] crate::recipe::RecipeError),
+    RecipeError(#[from] crate::RecipeError),
 
     #[error("Failed to strip prefix from path: {0}")]
     StripPrefixError(String),

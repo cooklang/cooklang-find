@@ -1,4 +1,4 @@
-use crate::recipe::RecipeEntry;
+use crate::RecipeEntry;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -8,7 +8,7 @@ pub enum FetchError {
     IoError(#[from] std::io::Error),
 
     #[error("Failed to parse recipe: {0}")]
-    RecipeError(#[from] crate::recipe::RecipeError),
+    RecipeError(#[from] crate::RecipeError),
 
     #[error("Invalid recipe path: {0}")]
     InvalidPath(PathBuf),

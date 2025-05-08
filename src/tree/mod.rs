@@ -1,4 +1,4 @@
-use crate::recipe::Recipe;
+use crate::recipe::RecipeEntry;
 use glob::glob;
 use std::path::Path;
 use thiserror::Error;
@@ -52,7 +52,7 @@ pub fn build_tree<P: AsRef<Path>>(base_dir: P) -> Result<RecipeTree, TreeError> 
 
     for entry in glob(&pattern)? {
         let path = entry?;
-        let recipe = Recipe::new(path.clone())?;
+        let recipe = RecipeEntry::new(path.clone())?;
 
         // Calculate the relative path from the base directory
         let rel_path = path
@@ -290,7 +290,7 @@ mod tests {
                 Test recipe"#},
         );
 
-        let recipe = Recipe::new(recipe_path.clone()).unwrap();
+        let recipe = RecipeEntry::new(recipe_path.clone()).unwrap();
         let tree = RecipeTree::new_with_recipe("test_recipe".to_string(), recipe_path, recipe);
 
         assert_eq!(tree.name, "test_recipe");

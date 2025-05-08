@@ -1,4 +1,4 @@
-use crate::recipe::Recipe;
+use crate::recipe::RecipeEntry;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -8,7 +8,7 @@ pub enum FetchError {
     IoError(#[from] std::io::Error),
 
     #[error("Failed to parse recipe: {0}")]
-    ParseError(String),
+    RecipeError(#[from] crate::recipe::RecipeError),
 
     #[error("Invalid recipe path: {0}")]
     InvalidPath(PathBuf),
@@ -18,15 +18,15 @@ pub enum FetchError {
 pub fn get_recipe<P: AsRef<Path>>(
     base_dirs: impl IntoIterator<Item = P>,
     name: P,
-) -> Result<Option<Recipe>, FetchError> {
+) -> Result<Option<RecipeEntry>, FetchError> {
     let name = name.as_ref();
 
     for base_dir in base_dirs {
-        let recipe_path = base_dir.as_ref().join(format!("{}.cook", name.display()));
+        let recipe_path = base_dir.as_ref().join(format!("{}.cook", name.to_string_lossy()));
         if recipe_path.exists() {
-            return Recipe::new(recipe_path)
+            return RecipeEntry::new(recipe_path)
                 .map(Some)
-                .map_err(|e| FetchError::ParseError(e.to_string()));
+                .map_err(FetchError::RecipeError);
         }
     }
 

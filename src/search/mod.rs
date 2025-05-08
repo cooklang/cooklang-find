@@ -1,4 +1,4 @@
-use crate::Recipe;
+use crate::RecipeEntry;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -24,12 +24,12 @@ pub enum SearchError {
 }
 
 /// Search for recipes containing the exact given text
-pub fn search(base_dir: &Path, query: &str) -> Result<Vec<Recipe>, SearchError> {
+pub fn search(base_dir: &Path, query: &str) -> Result<Vec<RecipeEntry>, SearchError> {
     let paths = search_paths(base_dir, query)?;
     let mut recipes = Vec::new();
 
     for path in paths {
-        match Recipe::new(path) {
+        match RecipeEntry::new(path) {
             Ok(recipe) => recipes.push(recipe),
             Err(e) => return Err(SearchError::RecipeError(e)),
         }

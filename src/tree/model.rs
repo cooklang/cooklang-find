@@ -1,4 +1,4 @@
-use crate::recipe::Recipe;
+use crate::recipe::RecipeEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ pub struct RecipeTree {
     /// Full path to this node
     pub path: PathBuf,
     /// If this is a recipe, contains the Recipe struct
-    pub recipe: Option<Recipe>,
+    pub recipe: Option<RecipeEntry>,
     /// Child directories and recipes
     pub children: HashMap<String, RecipeTree>,
 }
@@ -26,7 +26,7 @@ impl RecipeTree {
         }
     }
 
-    pub(crate) fn new_with_recipe(name: String, path: PathBuf, recipe: Recipe) -> Self {
+    pub(crate) fn new_with_recipe(name: String, path: PathBuf, recipe: RecipeEntry) -> Self {
         RecipeTree {
             name,
             path,

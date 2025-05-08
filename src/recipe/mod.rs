@@ -25,7 +25,7 @@ pub enum RecipeError {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Recipe {
+pub struct RecipeEntry {
     /// Name of the recipe (file stem)
     pub name: String,
     /// Path to the recipe file
@@ -43,9 +43,9 @@ pub struct Recipe {
     metadata: Option<HashMap<String, String>>,
 }
 
-impl Clone for Recipe {
+impl Clone for RecipeEntry {
     fn clone(&self) -> Self {
-        Recipe {
+        RecipeEntry {
             name: self.name.clone(),
             path: self.path.clone(),
             title_image: self.title_image.clone(),
@@ -56,21 +56,21 @@ impl Clone for Recipe {
     }
 }
 
-impl PartialEq for Recipe {
+impl PartialEq for RecipeEntry {
     fn eq(&self, other: &Self) -> bool {
         self.path == other.path
     }
 }
 
-impl Eq for Recipe {}
+impl Eq for RecipeEntry {}
 
-impl Hash for Recipe {
+impl Hash for RecipeEntry {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.path.hash(state);
     }
 }
 
-impl Recipe {
+impl RecipeEntry {
     /// Create a new Recipe instance from a path
     pub(crate) fn new(path: PathBuf) -> Result<Self, RecipeError> {
         let name = path
@@ -81,7 +81,7 @@ impl Recipe {
 
         let title_image = find_title_image(&path);
 
-        Ok(Recipe {
+        Ok(RecipeEntry {
             name,
             path,
             title_image,
@@ -206,7 +206,7 @@ mod tests {
                 Test recipe content"#},
         );
 
-        let recipe = Recipe::new(recipe_path.clone()).unwrap();
+        let recipe = RecipeEntry::new(recipe_path.clone()).unwrap();
         assert_eq!(recipe.name, "test_recipe");
         assert_eq!(recipe.path, recipe_path);
         assert!(recipe.title_image.is_none());
@@ -227,7 +227,7 @@ mod tests {
         );
         let image_path = create_test_image(temp_dir.path(), "test_recipe", "jpg");
 
-        let recipe = Recipe::new(recipe_path).unwrap();
+        let recipe = RecipeEntry::new(recipe_path).unwrap();
         assert_eq!(recipe.title_image.as_ref().unwrap(), &image_path);
     }
 
@@ -242,7 +242,7 @@ mod tests {
             Test recipe content"#};
         let recipe_path = create_test_recipe(temp_dir.path(), "test_recipe", content);
 
-        let mut recipe = Recipe::new(recipe_path).unwrap();
+        let mut recipe = RecipeEntry::new(recipe_path).unwrap();
         assert_eq!(recipe.content().unwrap(), content);
     }
 
@@ -259,7 +259,7 @@ mod tests {
             Test recipe content"#};
         let recipe_path = create_test_recipe(temp_dir.path(), "test_recipe", content);
 
-        let mut recipe = Recipe::new(recipe_path).unwrap();
+        let mut recipe = RecipeEntry::new(recipe_path).unwrap();
         let metadata = recipe.metadata().unwrap();
 
         assert_eq!(metadata.get("servings").unwrap(), "4");
@@ -278,7 +278,7 @@ mod tests {
             Add @salt{1%tsp} and @pepper{1%tsp}"#};
         let recipe_path = create_test_recipe(temp_dir.path(), "test_recipe", content);
 
-        let mut recipe = Recipe::new(recipe_path).unwrap();
+        let mut recipe = RecipeEntry::new(recipe_path).unwrap();
         let parsed = recipe.recipe().unwrap();
 
         assert_eq!(parsed.metadata.servings().unwrap()[0], 4);
@@ -299,7 +299,7 @@ mod tests {
                 Test recipe content"#},
         );
 
-        let mut original = Recipe::new(recipe_path).unwrap();
+        let mut original = RecipeEntry::new(recipe_path).unwrap();
         original.content().unwrap(); // Load content
 
         let cloned = original.clone();
@@ -333,9 +333,9 @@ mod tests {
                 Test recipe content"#},
         );
 
-        let recipe1 = Recipe::new(path1.clone()).unwrap();
-        let recipe2 = Recipe::new(path1).unwrap();
-        let recipe3 = Recipe::new(path2).unwrap();
+        let recipe1 = RecipeEntry::new(path1.clone()).unwrap();
+        let recipe2 = RecipeEntry::new(path1).unwrap();
+        let recipe3 = RecipeEntry::new(path2).unwrap();
 
         assert_eq!(recipe1, recipe2);
         assert_ne!(recipe1, recipe3);
@@ -346,7 +346,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let invalid_path = temp_dir.path().join("nonexistent.cook");
 
-        let mut recipe = Recipe::new(invalid_path).unwrap();
+        let mut recipe = RecipeEntry::new(invalid_path).unwrap();
         assert!(recipe.content().is_err());
     }
 

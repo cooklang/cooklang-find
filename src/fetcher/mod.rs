@@ -62,7 +62,7 @@ mod tests {
 
         let result = get_recipe([temp_dir.path()], Path::new("pancakes")).unwrap();
         assert!(result.is_some());
-        assert_eq!(result.unwrap().name, "pancakes");
+        assert_eq!(result.unwrap().name.as_ref().unwrap(), "pancakes");
     }
 
     #[test]
@@ -90,7 +90,7 @@ mod tests {
 
         let result = get_recipe([dir1.path(), dir2.path()], Path::new("pancakes")).unwrap();
         assert!(result.is_some());
-        assert_eq!(result.unwrap().name, "pancakes");
+        assert_eq!(result.unwrap().name.as_ref().unwrap(), "pancakes");
     }
 
     #[test]
@@ -122,8 +122,8 @@ mod tests {
         let result = get_recipe([dir1.path(), dir2.path()], Path::new("pancakes")).unwrap();
         assert!(result.is_some());
         let recipe = result.unwrap();
-        assert_eq!(recipe.name, "pancakes");
-        assert!(recipe.path.starts_with(dir1.path())); // Should find the recipe in the first directory
+        assert_eq!(recipe.name.as_ref().unwrap(), "pancakes");
+        assert!(recipe.path.as_ref().unwrap().starts_with(dir1.path())); // Should find the recipe in the first directory
     }
 
     #[test]
@@ -164,6 +164,6 @@ mod tests {
         // Should find recipe when searching subdirectory directly
         let result = get_recipe([sub_dir], Path::new("pancakes").to_path_buf()).unwrap();
         assert!(result.is_some());
-        assert_eq!(result.unwrap().name, "pancakes");
+        assert_eq!(result.unwrap().name.as_ref().unwrap(), "pancakes");
     }
 }

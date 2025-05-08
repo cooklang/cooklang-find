@@ -42,7 +42,7 @@ pub fn build_tree<P: AsRef<Path>>(base_dir: P) -> Result<RecipeTree, TreeError> 
     let base_name = base_dir
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| String::from("root"));
+        .unwrap_or_else(|| String::from("./"));
 
     let mut root = RecipeTree::new(base_name, base_dir.to_owned());
 
@@ -77,7 +77,7 @@ pub fn build_tree<P: AsRef<Path>>(base_dir: P) -> Result<RecipeTree, TreeError> 
         }
 
         // Add the recipe as a leaf node
-        let name = recipe.name.clone();
+        let name = recipe.name.as_ref().unwrap().clone();
         current.children.insert(
             name.clone(),
             RecipeTree::new_with_recipe(name, path, recipe),

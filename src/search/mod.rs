@@ -211,7 +211,7 @@ mod tests {
         let results = search(temp_dir.path(), "pancakes").unwrap();
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name, "pancakes");
+        assert_eq!(results[0].name.as_ref().unwrap(), "pancakes");
     }
 
     #[test]
@@ -221,9 +221,9 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         // Both pancakes and waffles should be found as they contain "syrup"
-        let names: Vec<_> = results.iter().map(|r| r.name.as_str()).collect();
-        assert!(names.contains(&"pancakes"));
-        assert!(names.contains(&"waffles"));
+        let names: Vec<_> = results.iter().map(|r| r.name.as_ref().unwrap()).collect();
+        assert!(names.iter().any(|n| *n == "pancakes"));
+        assert!(names.iter().any(|n| *n == "waffles"));
     }
 
     #[test]
@@ -232,7 +232,7 @@ mod tests {
         let results = search(temp_dir.path(), "PANCAKES").unwrap();
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name, "pancakes");
+        assert_eq!(results[0].name.as_ref().unwrap(), "pancakes");
     }
 
     #[test]
@@ -241,7 +241,7 @@ mod tests {
         let results = search(temp_dir.path(), "cheese mushroom").unwrap();
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name, "omelette");
+        assert_eq!(results[0].name.as_ref().unwrap(), "omelette");
     }
 
     #[test]
@@ -258,7 +258,7 @@ mod tests {
         let results = search(temp_dir.path(), "omelette").unwrap();
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name, "omelette");
+        assert_eq!(results[0].name.as_ref().unwrap(), "omelette");
     }
 
     #[test]

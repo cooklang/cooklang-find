@@ -26,13 +26,13 @@ pub enum RecipeError {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecipeEntry {
-    /// Name of the recipe (file stem)
-    pub name: String,
-    /// Path to the recipe file
-    pub path: PathBuf,
+    /// Optional name of the recipe (file stem)
+    pub name: Option<String>,
+    /// Optional path to the recipe file
+    pub path: Option<PathBuf>,
     /// Optional path to the title image
     pub title_image: Option<PathBuf>,
-    /// Cached content of the recipe file
+    /// Cached string content of the recipe
     #[serde(skip)]
     content: Option<String>,
     /// Cached parsed recipe
@@ -82,8 +82,8 @@ impl RecipeEntry {
         let title_image = find_title_image(&path);
 
         Ok(RecipeEntry {
-            name,
-            path,
+            name: Some(name),
+            path: Some(path),
             title_image,
             content: None,
             parsed: None,
@@ -94,7 +94,7 @@ impl RecipeEntry {
     /// Get the content of the recipe file
     pub fn content(&mut self) -> Result<&str, RecipeError> {
         if self.content.is_none() {
-            let content = fs::read_to_string(&self.path)?;
+            let content = fs::read_to_string(self.path.as_ref().unwrap())?;
             self.content = Some(content);
         }
         Ok(self.content.as_ref().unwrap())
@@ -207,8 +207,8 @@ mod tests {
         );
 
         let recipe = RecipeEntry::new(recipe_path.clone()).unwrap();
-        assert_eq!(recipe.name, "test_recipe");
-        assert_eq!(recipe.path, recipe_path);
+        assert_eq!(recipe.name.as_ref().unwrap(), "test_recipe");
+        assert_eq!(recipe.path.as_ref().unwrap(), &recipe_path);
         assert!(recipe.title_image.is_none());
     }
 

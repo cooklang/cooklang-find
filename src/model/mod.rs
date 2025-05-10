@@ -7,31 +7,18 @@ use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use once_cell::sync::OnceCell;
 use thiserror::Error;
 
-#[derive(Error, Debug)]
-pub enum RecipeError {
-    #[error("Failed to read recipe file: {0}")]
-    IoError(#[from] std::io::Error),
-
-    #[error("Failed to get file stem from path: {0}")]
-    InvalidPath(PathBuf),
-
-    #[error("Failed to parse recipe: {0}")]
-    ParseError(String),
-
-    #[error("Failed to parse recipe metadata: {0}")]
-    MetadataError(String),
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecipeEntry {
     /// Cachedd name of the recipe (from file stem or title)
     name: Option<String>,
     /// Optional path to the recipe file
-    pub path: Option<PathBuf>,
+    path: Option<PathBuf>,
     /// Optional path to the title image
-    pub title_image: Option<PathBuf>,
+    title_image: Option<PathBuf>,
     /// Cached string content of the recipe
     #[serde(skip)]
     content: Option<String>,
@@ -43,32 +30,6 @@ pub struct RecipeEntry {
     metadata: Option<HashMap<String, String>>,
 }
 
-impl Clone for RecipeEntry {
-    fn clone(&self) -> Self {
-        RecipeEntry {
-            name: self.name.clone(),
-            path: self.path.clone(),
-            title_image: self.title_image.clone(),
-            content: self.content.clone(),
-            parsed: None, // Don't clone the parsed recipe, it can be re-parsed if needed
-            metadata: None,
-        }
-    }
-}
-
-impl PartialEq for RecipeEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.path == other.path
-    }
-}
-
-impl Eq for RecipeEntry {}
-
-impl Hash for RecipeEntry {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.path.hash(state);
-    }
-}
 
 impl RecipeEntry {
     /// Create a new Recipe instance from a path
@@ -96,112 +57,21 @@ impl RecipeEntry {
             metadata: None,
         })
     }
+}
 
-    pub fn name(&mut self) -> Option<&str> {
-        if self.name.is_some() {
-            return self.name.as_deref();
-        }
+#[derive(Error, Debug)]
+pub enum RecipeError {
+    #[error("Failed to read recipe file: {0}")]
+    IoError(#[from] std::io::Error),
 
-        if self.content.is_some() {
-            if let Some(parsed) = &self.parsed {
-                if let Some(title) = parsed.metadata.title() {
-                    self.name = Some(title.to_string());
+    #[error("Failed to get file stem from path: {0}")]
+    InvalidPath(PathBuf),
 
-                    return self.name.as_deref();
-                }
-            }
+    #[error("Failed to parse recipe: {0}")]
+    ParseError(String),
 
-            if let Ok(metadata) = self.metadata() {
-                if let Some(title) = metadata.get("title") {
-                    self.name = Some(title.to_string());
-
-                    return self.name.as_deref();
-                }
-            }
-        }
-
-        if let Some(path) = &self.path {
-            let name = path
-                .file_stem()?
-                .to_string_lossy()
-                .into_owned();
-
-            self.name = Some(name);
-
-            return self.name.as_deref();
-        }
-
-        None
-    }
-
-    /// Get the content of the recipe file
-    pub fn content(&mut self) -> Result<&str, RecipeError> {
-        if self.content.is_none() {
-            let content = fs::read_to_string(self.path.as_ref().unwrap())?;
-            self.content = Some(content);
-        }
-        Ok(self.content.as_ref().unwrap())
-    }
-
-    /// Parse the recipe and return the parsed representation
-    pub fn recipe(&mut self) -> Result<CooklangRecipe<Servings, ScalableValue>, RecipeError> {
-        if self.parsed.is_none() {
-            let content = self.content()?;
-            let parser = CooklangParser::new(Extensions::default(), Converter::default());
-            let pass_result = parser.parse(content);
-            match pass_result.into_result() {
-                Ok((recipe, _warnings)) => {
-                    self.parsed = Some(recipe);
-                }
-                Err(e) => {
-                    return Err(RecipeError::ParseError(e.to_string()));
-                }
-            }
-        }
-
-        // TODO: Return a clone of the parsed recipe
-        Ok(self.parsed.take().unwrap())
-    }
-
-    /// Parse only the metadata of the recipe
-    pub fn metadata(&mut self) -> Result<&HashMap<String, String>, RecipeError> {
-        if self.metadata.is_none() {
-            // TODO check if parsed set
-            let content = self.content()?;
-            let parser = CooklangParser::new(Extensions::default(), Converter::default());
-            let pass_result = parser.parse_metadata(content);
-            match pass_result.into_result() {
-                Ok((metadata, _warnings)) => {
-                    let metadata_map: HashMap<String, String> = metadata
-                        .map
-                        .into_iter()
-                        .map(|(k, v)| {
-                            let value = if let Some(s) = v.as_str() {
-                                s.to_string()
-                            } else if let Some(i) = v.as_i64() {
-                                i.to_string()
-                            } else if let Some(f) = v.as_f64() {
-                                f.to_string()
-                            } else {
-                                v.as_str().unwrap_or_default().to_string()
-                            };
-                            (k.as_str().unwrap_or_default().to_string(), value)
-                        })
-                        .collect();
-                    self.metadata = Some(metadata_map);
-                }
-                Err(e) => {
-                    return Err(RecipeError::MetadataError(e.to_string()));
-                }
-            }
-        }
-        Ok(self.metadata.as_ref().unwrap())
-    }
-
-    /// Get the path to the title image if it exists
-    pub fn title_image(&self) -> Option<&Path> {
-        self.title_image.as_deref()
-    }
+    #[error("Failed to parse recipe metadata: {0}")]
+    MetadataError(String),
 }
 
 fn find_title_image(path: &Path) -> Option<PathBuf> {

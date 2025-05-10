@@ -22,9 +22,14 @@ pub fn get_recipe<P: AsRef<Path>>(
     let name = name.as_ref();
 
     for base_dir in base_dirs {
-        let recipe_path = base_dir.as_ref().join(format!("{}.cook", name.to_string_lossy()));
+        let recipe_path = if name.to_string_lossy().ends_with(".cook") {
+            base_dir.as_ref().join(name)
+        } else {
+            base_dir.as_ref().join(format!("{}.cook", name.to_string_lossy()))
+        };
+        println!("recipe_path: {}", recipe_path.display());
         if recipe_path.exists() {
-            return RecipeEntry::new(recipe_path)
+            return RecipeEntry::from_path(recipe_path)
                 .map(Some)
                 .map_err(FetchError::RecipeError);
         }
@@ -41,7 +46,11 @@ mod tests {
     use tempfile::TempDir;
 
     fn create_test_recipe(dir: &Path, name: &str, content: &str) -> PathBuf {
-        let path = dir.join(format!("{}.cook", name));
+        let path = if name.ends_with(".cook") {
+            dir.join(name)
+        } else {
+            dir.join(format!("{}.cook", name))
+        };
         fs::write(&path, content).unwrap();
         path
     }
@@ -165,5 +174,25 @@ mod tests {
         let result = get_recipe([sub_dir], Path::new("pancakes").to_path_buf()).unwrap();
         assert!(result.is_some());
         assert_eq!(result.unwrap().name.as_ref().unwrap(), "pancakes");
+    }
+
+    #[test]
+    fn test_get_recipe_with_existing_extension() {
+        let temp_dir = TempDir::new().unwrap();
+        create_test_recipe(
+            temp_dir.path(),
+            "pancakes.cook",
+            indoc! {r#"
+                ---
+                servings: 4
+                ---
+
+                Make pancakes"#},
+        );
+
+        // Should find recipe when name already includes .cook extension
+        let result = get_recipe([temp_dir.path()], Path::new("pancakes.cook")).unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().name.as_ref().unwrap(), "pancakes.cook");
     }
 }

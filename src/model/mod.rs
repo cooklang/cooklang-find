@@ -26,8 +26,8 @@ pub enum RecipeError {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecipeEntry {
-    /// Optional name of the recipe (file stem)
-    pub name: Option<String>,
+    /// Cachedd name of the recipe (from file stem or title)
+    name: Option<String>,
     /// Optional path to the recipe file
     pub path: Option<PathBuf>,
     /// Optional path to the title image
@@ -72,23 +72,66 @@ impl Hash for RecipeEntry {
 
 impl RecipeEntry {
     /// Create a new Recipe instance from a path
-    pub(crate) fn new(path: PathBuf) -> Result<Self, RecipeError> {
-        let name = path
-            .file_stem()
-            .ok_or_else(|| RecipeError::InvalidPath(path.clone()))?
-            .to_string_lossy()
-            .into_owned();
-
+    pub fn from_path(path: PathBuf) -> Result<Self, RecipeError> {
         let title_image = find_title_image(&path);
 
         Ok(RecipeEntry {
-            name: Some(name),
+            name: None,
             path: Some(path),
             title_image,
             content: None,
             parsed: None,
             metadata: None,
         })
+    }
+
+    /// Create a new Recipe instance from content
+    pub fn from_content(content: String) -> Result<Self, RecipeError> {
+        Ok(RecipeEntry {
+            name: None,
+            path: None,
+            title_image: None,
+            content: Some(content),
+            parsed: None,
+            metadata: None,
+        })
+    }
+
+    pub fn name(&mut self) -> Option<&str> {
+        if self.name.is_some() {
+            return self.name.as_deref();
+        }
+
+        if self.content.is_some() {
+            if let Some(parsed) = &self.parsed {
+                if let Some(title) = parsed.metadata.title() {
+                    self.name = Some(title.to_string());
+
+                    return self.name.as_deref();
+                }
+            }
+
+            if let Ok(metadata) = self.metadata() {
+                if let Some(title) = metadata.get("title") {
+                    self.name = Some(title.to_string());
+
+                    return self.name.as_deref();
+                }
+            }
+        }
+
+        if let Some(path) = &self.path {
+            let name = path
+                .file_stem()?
+                .to_string_lossy()
+                .into_owned();
+
+            self.name = Some(name);
+
+            return self.name.as_deref();
+        }
+
+        None
     }
 
     /// Get the content of the recipe file
@@ -101,7 +144,7 @@ impl RecipeEntry {
     }
 
     /// Parse the recipe and return the parsed representation
-    pub fn recipe(&mut self) -> Result<&CooklangRecipe<Servings, ScalableValue>, RecipeError> {
+    pub fn recipe(&mut self) -> Result<CooklangRecipe<Servings, ScalableValue>, RecipeError> {
         if self.parsed.is_none() {
             let content = self.content()?;
             let parser = CooklangParser::new(Extensions::default(), Converter::default());
@@ -115,12 +158,15 @@ impl RecipeEntry {
                 }
             }
         }
-        Ok(self.parsed.as_ref().unwrap())
+
+        // TODO: Return a clone of the parsed recipe
+        Ok(self.parsed.take().unwrap())
     }
 
     /// Parse only the metadata of the recipe
     pub fn metadata(&mut self) -> Result<&HashMap<String, String>, RecipeError> {
         if self.metadata.is_none() {
+            // TODO check if parsed set
             let content = self.content()?;
             let parser = CooklangParser::new(Extensions::default(), Converter::default());
             let pass_result = parser.parse_metadata(content);
@@ -206,7 +252,7 @@ mod tests {
                 Test recipe content"#},
         );
 
-        let recipe = RecipeEntry::new(recipe_path.clone()).unwrap();
+        let recipe = RecipeEntry::from_path(recipe_path.clone()).unwrap();
         assert_eq!(recipe.name.as_ref().unwrap(), "test_recipe");
         assert_eq!(recipe.path.as_ref().unwrap(), &recipe_path);
         assert!(recipe.title_image.is_none());
@@ -227,7 +273,7 @@ mod tests {
         );
         let image_path = create_test_image(temp_dir.path(), "test_recipe", "jpg");
 
-        let recipe = RecipeEntry::new(recipe_path).unwrap();
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
         assert_eq!(recipe.title_image.as_ref().unwrap(), &image_path);
     }
 
@@ -242,7 +288,7 @@ mod tests {
             Test recipe content"#};
         let recipe_path = create_test_recipe(temp_dir.path(), "test_recipe", content);
 
-        let mut recipe = RecipeEntry::new(recipe_path).unwrap();
+        let mut recipe = RecipeEntry::from_path(recipe_path).unwrap();
         assert_eq!(recipe.content().unwrap(), content);
     }
 
@@ -259,7 +305,7 @@ mod tests {
             Test recipe content"#};
         let recipe_path = create_test_recipe(temp_dir.path(), "test_recipe", content);
 
-        let mut recipe = RecipeEntry::new(recipe_path).unwrap();
+        let mut recipe = RecipeEntry::from_path(recipe_path).unwrap();
         let metadata = recipe.metadata().unwrap();
 
         assert_eq!(metadata.get("servings").unwrap(), "4");
@@ -278,7 +324,7 @@ mod tests {
             Add @salt{1%tsp} and @pepper{1%tsp}"#};
         let recipe_path = create_test_recipe(temp_dir.path(), "test_recipe", content);
 
-        let mut recipe = RecipeEntry::new(recipe_path).unwrap();
+        let mut recipe = RecipeEntry::from_path(recipe_path).unwrap();
         let parsed = recipe.recipe().unwrap();
 
         assert_eq!(parsed.metadata.servings().unwrap()[0], 4);
@@ -299,7 +345,7 @@ mod tests {
                 Test recipe content"#},
         );
 
-        let mut original = RecipeEntry::new(recipe_path).unwrap();
+        let mut original = RecipeEntry::from_path(recipe_path).unwrap();
         original.content().unwrap(); // Load content
 
         let cloned = original.clone();
@@ -333,9 +379,9 @@ mod tests {
                 Test recipe content"#},
         );
 
-        let recipe1 = RecipeEntry::new(path1.clone()).unwrap();
-        let recipe2 = RecipeEntry::new(path1).unwrap();
-        let recipe3 = RecipeEntry::new(path2).unwrap();
+        let recipe1 = RecipeEntry::from_path(path1.clone()).unwrap();
+        let recipe2 = RecipeEntry::from_path(path1).unwrap();
+        let recipe3 = RecipeEntry::from_path(path2).unwrap();
 
         assert_eq!(recipe1, recipe2);
         assert_ne!(recipe1, recipe3);
@@ -346,7 +392,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let invalid_path = temp_dir.path().join("nonexistent.cook");
 
-        let mut recipe = RecipeEntry::new(invalid_path).unwrap();
+        let mut recipe = RecipeEntry::from_path(invalid_path).unwrap();
         assert!(recipe.content().is_err());
     }
 
@@ -409,5 +455,36 @@ mod tests {
 
         // Should find the image with uppercase extension
         assert!(found_image.is_some());
+    }
+
+    #[test]
+    fn test_recipe_from_content() {
+        let content = indoc! {r#"
+            ---
+            servings: 4
+            time: 30 min
+            cuisine: Italian
+            ---
+
+            Add @salt{1%tsp} and @pepper{1%tsp}"#};
+
+        let mut recipe = RecipeEntry::from_content(content.to_string()).unwrap();
+        assert!(recipe.name.is_none());
+        assert!(recipe.path.is_none());
+        assert!(recipe.title_image.is_none());
+
+        // Verify content is set
+        assert_eq!(recipe.content().unwrap(), content);
+
+        // Verify metadata is parsed correctly
+        let metadata = recipe.metadata().unwrap();
+        assert_eq!(metadata.get("servings").unwrap(), "4");
+        assert_eq!(metadata.get("time").unwrap(), "30 min");
+        assert_eq!(metadata.get("cuisine").unwrap(), "Italian");
+
+        // Verify recipe is parsed correctly
+        let parsed = recipe.recipe().unwrap();
+        assert_eq!(parsed.metadata.servings().unwrap()[0], 4);
+        assert_eq!(parsed.ingredients.len(), 2);
     }
 }

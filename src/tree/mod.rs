@@ -52,7 +52,7 @@ pub fn build_tree<P: AsRef<Path>>(base_dir: P) -> Result<RecipeTree, TreeError> 
 
     for entry in glob(&pattern)? {
         let path = entry?;
-        let recipe = RecipeEntry::new(path.clone())?;
+        let mut recipe = RecipeEntry::from_path(path.clone())?;
 
         // Calculate the relative path from the base directory
         let rel_path = path
@@ -77,7 +77,7 @@ pub fn build_tree<P: AsRef<Path>>(base_dir: P) -> Result<RecipeTree, TreeError> 
         }
 
         // Add the recipe as a leaf node
-        let name = recipe.name.as_ref().unwrap().clone();
+        let name = recipe.name().unwrap().to_string();
         current.children.insert(
             name.clone(),
             RecipeTree::new_with_recipe(name, path, recipe),
@@ -290,7 +290,7 @@ mod tests {
                 Test recipe"#},
         );
 
-        let recipe = RecipeEntry::new(recipe_path.clone()).unwrap();
+        let recipe = RecipeEntry::from_path(recipe_path.clone()).unwrap();
         let tree = RecipeTree::new_with_recipe("test_recipe".to_string(), recipe_path, recipe);
 
         assert_eq!(tree.name, "test_recipe");

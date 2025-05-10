@@ -29,7 +29,7 @@ pub fn search(base_dir: &Path, query: &str) -> Result<Vec<RecipeEntry>, SearchEr
     let mut recipes = Vec::new();
 
     for path in paths {
-        match RecipeEntry::new(path) {
+        match RecipeEntry::from_path(path) {
             Ok(recipe) => recipes.push(recipe),
             Err(e) => return Err(SearchError::RecipeError(e)),
         }

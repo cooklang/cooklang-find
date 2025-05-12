@@ -56,7 +56,6 @@ dependencies = [
  "cooklang",
  "glob",
  "indoc",
- "once_cell",
  "serde",
  "tempfile",
  "thiserror",

@@ -29,7 +29,7 @@ pub fn get_recipe<P: AsRef<Path>>(
                 .as_ref()
                 .join(format!("{}.cook", name.to_string_lossy()))
         };
-        println!("recipe_path: {}", recipe_path.display());
+
         if recipe_path.exists() {
             return RecipeEntry::from_path(recipe_path)
                 .map(Some)

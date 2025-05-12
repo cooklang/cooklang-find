@@ -1,7 +1,5 @@
-use cooklang::{
-    quantity::ScalableValue, scale::Servings, CooklangParser, Metadata, Recipe as CooklangRecipe,
-};
-use once_cell::sync::OnceCell;
+use cooklang::{CooklangParser, Metadata, ScaledRecipe};
+use std::sync::OnceLock;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -15,13 +13,17 @@ pub struct RecipeEntry {
     metadata: Metadata,
 
     /// Cachedd name of the recipe (from file stem or title)
-    name: OnceCell<Option<String>>,
+    name: OnceLock<Option<String>>,
     /// Optional path to the title image
     // TODO some data structure for all images instead
-    title_image: OnceCell<Option<PathBuf>>,
+    title_image: OnceLock<Option<PathBuf>>,
+
+    /// Scaling factor for the recipe
+    scaling_factor: OnceLock<f64>,
+
     /// Cached parsed recipe
     // TODO scaled or not?
-    recipe: OnceCell<CooklangRecipe<Servings, ScalableValue>>,
+    recipe: OnceLock<ScaledRecipe>,
 }
 
 impl RecipeEntry {
@@ -39,9 +41,10 @@ impl RecipeEntry {
             path: Some(path.to_path_buf()),
             content: content,
             metadata: metadata,
-            name: OnceCell::new(),
-            title_image: OnceCell::new(),
-            recipe: OnceCell::new(),
+            name: OnceLock::new(),
+            title_image: OnceLock::new(),
+            scaling_factor: OnceLock::new(),
+            recipe: OnceLock::new(),
         })
     }
 
@@ -56,9 +59,10 @@ impl RecipeEntry {
             path: None,
             content: content,
             metadata: metadata,
-            name: OnceCell::new(),
-            title_image: OnceCell::new(),
-            recipe: OnceCell::new(),
+            name: OnceLock::new(),
+            title_image: OnceLock::new(),
+            scaling_factor: OnceLock::new(),
+            recipe: OnceLock::new(),
         })
     }
 
@@ -85,15 +89,24 @@ impl RecipeEntry {
         })
     }
 
-    pub fn recipe(&self) -> &CooklangRecipe<Servings, ScalableValue> {
+    pub fn recipe(&self, scaling_factor: f64) -> &ScaledRecipe {
         self.recipe.get_or_init(|| {
-            let (recipe, _warnings) = CooklangParser::canonical()
+            self.scaling_factor.set(scaling_factor).unwrap();
+
+            let parser = CooklangParser::canonical();
+
+            let (recipe, _warnings) = parser
                 .parse(&self.content)
                 .into_result()
                 .unwrap();
 
-            recipe
+            // Scale the recipe
+            recipe.scale(*self.scaling_factor(), parser.converter())
         })
+    }
+
+    pub fn scaling_factor(&self) -> &f64 {
+        self.scaling_factor.get_or_init(|| 1.0)
     }
 
     pub fn path(&self) -> &Option<PathBuf> {
@@ -237,7 +250,7 @@ mod tests {
         let recipe_path = create_test_recipe(temp_dir.path(), "test_recipe", content);
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let parsed = recipe.recipe();
+        let parsed = recipe.recipe(1.0);
 
         assert_eq!(parsed.metadata.servings().unwrap()[0], 4);
         assert_eq!(parsed.ingredients.len(), 2);
@@ -372,7 +385,7 @@ mod tests {
         assert_eq!(metadata.get("cuisine").unwrap(), "Italian");
 
         // Verify recipe is parsed correctly
-        let parsed = recipe.recipe();
+        let parsed = recipe.recipe(1.0);
         assert_eq!(parsed.metadata.servings().unwrap()[0], 4);
         assert_eq!(parsed.ingredients.len(), 2);
     }

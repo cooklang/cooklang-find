@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Represents a node in the recipe directory tree
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct RecipeTree {
     /// Name of the current node (directory name or recipe name)
     pub name: String,

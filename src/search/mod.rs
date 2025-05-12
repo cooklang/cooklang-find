@@ -17,7 +17,7 @@ pub enum SearchError {
     PatternError(#[from] glob::PatternError),
 
     #[error("Failed to process recipe: {0}")]
-    RecipeError(#[from] crate::RecipeError),
+    RecipeEntryError(#[from] crate::RecipeEntryError),
 
     #[error("Failed to read file: {0}")]
     IoError(#[from] std::io::Error),
@@ -31,7 +31,7 @@ pub fn search(base_dir: &Path, query: &str) -> Result<Vec<RecipeEntry>, SearchEr
     for path in paths {
         match RecipeEntry::from_path(path) {
             Ok(recipe) => recipes.push(recipe),
-            Err(e) => return Err(SearchError::RecipeError(e)),
+            Err(e) => return Err(SearchError::RecipeEntryError(e)),
         }
     }
 
@@ -211,7 +211,7 @@ mod tests {
         let results = search(temp_dir.path(), "pancakes").unwrap();
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name.as_ref().unwrap(), "pancakes");
+        assert_eq!(results[0].name().as_ref().unwrap(), "pancakes");
     }
 
     #[test]
@@ -221,7 +221,7 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         // Both pancakes and waffles should be found as they contain "syrup"
-        let names: Vec<_> = results.iter().map(|r| r.name.as_ref().unwrap()).collect();
+        let names: Vec<_> = results.iter().map(|r| r.name().as_ref().unwrap()).collect();
         assert!(names.iter().any(|n| *n == "pancakes"));
         assert!(names.iter().any(|n| *n == "waffles"));
     }
@@ -232,7 +232,7 @@ mod tests {
         let results = search(temp_dir.path(), "PANCAKES").unwrap();
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name.as_ref().unwrap(), "pancakes");
+        assert_eq!(results[0].name().as_ref().unwrap(), "pancakes");
     }
 
     #[test]
@@ -241,7 +241,7 @@ mod tests {
         let results = search(temp_dir.path(), "cheese mushroom").unwrap();
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name.as_ref().unwrap(), "omelette");
+        assert_eq!(results[0].name().as_ref().unwrap(), "omelette");
     }
 
     #[test]
@@ -258,7 +258,7 @@ mod tests {
         let results = search(temp_dir.path(), "omelette").unwrap();
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name.as_ref().unwrap(), "omelette");
+        assert_eq!(results[0].name().as_ref().unwrap(), "omelette");
     }
 
     #[test]

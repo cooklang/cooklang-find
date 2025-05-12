@@ -8,7 +8,7 @@ pub enum FetchError {
     IoError(#[from] std::io::Error),
 
     #[error("Failed to parse recipe: {0}")]
-    RecipeError(#[from] crate::RecipeError),
+    RecipeEntryError(#[from] crate::RecipeEntryError),
 
     #[error("Invalid recipe path: {0}")]
     InvalidPath(PathBuf),
@@ -25,13 +25,15 @@ pub fn get_recipe<P: AsRef<Path>>(
         let recipe_path = if name.to_string_lossy().ends_with(".cook") {
             base_dir.as_ref().join(name)
         } else {
-            base_dir.as_ref().join(format!("{}.cook", name.to_string_lossy()))
+            base_dir
+                .as_ref()
+                .join(format!("{}.cook", name.to_string_lossy()))
         };
         println!("recipe_path: {}", recipe_path.display());
         if recipe_path.exists() {
             return RecipeEntry::from_path(recipe_path)
                 .map(Some)
-                .map_err(FetchError::RecipeError);
+                .map_err(FetchError::RecipeEntryError);
         }
     }
 
@@ -71,7 +73,7 @@ mod tests {
 
         let result = get_recipe([temp_dir.path()], Path::new("pancakes")).unwrap();
         assert!(result.is_some());
-        assert_eq!(result.unwrap().name.as_ref().unwrap(), "pancakes");
+        assert_eq!(result.unwrap().name().as_ref().unwrap(), "pancakes");
     }
 
     #[test]
@@ -99,7 +101,7 @@ mod tests {
 
         let result = get_recipe([dir1.path(), dir2.path()], Path::new("pancakes")).unwrap();
         assert!(result.is_some());
-        assert_eq!(result.unwrap().name.as_ref().unwrap(), "pancakes");
+        assert_eq!(result.unwrap().name().as_ref().unwrap(), "pancakes");
     }
 
     #[test]
@@ -131,8 +133,8 @@ mod tests {
         let result = get_recipe([dir1.path(), dir2.path()], Path::new("pancakes")).unwrap();
         assert!(result.is_some());
         let recipe = result.unwrap();
-        assert_eq!(recipe.name.as_ref().unwrap(), "pancakes");
-        assert!(recipe.path.as_ref().unwrap().starts_with(dir1.path())); // Should find the recipe in the first directory
+        assert_eq!(recipe.name().as_ref().unwrap(), "pancakes");
+        assert!(recipe.path().as_ref().unwrap().starts_with(dir1.path())); // Should find the recipe in the first directory
     }
 
     #[test]
@@ -173,7 +175,7 @@ mod tests {
         // Should find recipe when searching subdirectory directly
         let result = get_recipe([sub_dir], Path::new("pancakes").to_path_buf()).unwrap();
         assert!(result.is_some());
-        assert_eq!(result.unwrap().name.as_ref().unwrap(), "pancakes");
+        assert_eq!(result.unwrap().name().as_ref().unwrap(), "pancakes");
     }
 
     #[test]
@@ -193,6 +195,6 @@ mod tests {
         // Should find recipe when name already includes .cook extension
         let result = get_recipe([temp_dir.path()], Path::new("pancakes.cook")).unwrap();
         assert!(result.is_some());
-        assert_eq!(result.unwrap().name.as_ref().unwrap(), "pancakes.cook");
+        assert_eq!(result.unwrap().name().as_ref().unwrap(), "pancakes");
     }
 }

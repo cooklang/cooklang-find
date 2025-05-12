@@ -125,7 +125,7 @@ Add @salt{1%tsp} to taste.
 The library provides custom error types for different scenarios:
 
 - `FetchError`: Issues with finding recipes
-- `RecipeError`: Problems with recipe parsing or reading
+- `RecipeEntryError`: Problems with recipe parsing or reading
 - `TreeError`: Errors in building recipe tree structure
 - `SearchError`: Issues during recipe search
 

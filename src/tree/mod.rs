@@ -21,7 +21,7 @@ pub enum TreeError {
     PatternError(#[from] glob::PatternError),
 
     #[error("Failed to process recipe: {0}")]
-    RecipeError(#[from] crate::RecipeError),
+    RecipeEntryError(#[from] crate::RecipeEntryError),
 
     #[error("Failed to strip prefix from path: {0}")]
     StripPrefixError(String),
@@ -52,7 +52,7 @@ pub fn build_tree<P: AsRef<Path>>(base_dir: P) -> Result<RecipeTree, TreeError> 
 
     for entry in glob(&pattern)? {
         let path = entry?;
-        let mut recipe = RecipeEntry::from_path(path.clone())?;
+        let recipe = RecipeEntry::from_path(path.clone())?;
 
         // Calculate the relative path from the base directory
         let rel_path = path
@@ -77,7 +77,8 @@ pub fn build_tree<P: AsRef<Path>>(base_dir: P) -> Result<RecipeTree, TreeError> 
         }
 
         // Add the recipe as a leaf node
-        let name = recipe.name().unwrap().to_string();
+        let name = recipe.name().clone().unwrap();
+
         current.children.insert(
             name.clone(),
             RecipeTree::new_with_recipe(name, path, recipe),
@@ -162,7 +163,7 @@ mod tests {
         let tree = build_tree(temp_dir.path()).unwrap();
 
         let recipe_node = tree.children.get("pancakes").unwrap();
-        assert!(recipe_node.recipe.as_ref().unwrap().title_image.is_some());
+        assert!(recipe_node.recipe.as_ref().unwrap().title_image().is_some());
     }
 
     #[test]

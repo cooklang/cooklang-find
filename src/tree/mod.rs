@@ -1,6 +1,6 @@
 use crate::RecipeEntry;
 use glob::glob;
-use std::path::Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
 mod model;
@@ -28,36 +28,39 @@ pub enum TreeError {
 }
 
 /// Build a tree structure of recipes and directories for a given base directory
-pub fn build_tree<P: AsRef<Path>>(base_dir: P) -> Result<RecipeTree, TreeError> {
+pub fn build_tree<P: AsRef<Utf8Path>>(base_dir: P) -> Result<RecipeTree, TreeError> {
     let base_dir = base_dir.as_ref();
 
     // Check if directory exists
     if !base_dir.exists() {
-        return Err(TreeError::DirectoryNotFound(base_dir.display().to_string()));
+        return Err(TreeError::DirectoryNotFound(base_dir.to_string()));
     }
     if !base_dir.is_dir() {
-        return Err(TreeError::NotADirectory(base_dir.display().to_string()));
+        return Err(TreeError::NotADirectory(base_dir.to_string()));
     }
 
     let base_name = base_dir
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+        .map(|n| n.to_string())
         .unwrap_or_else(|| String::from("./"));
 
-    let mut root = RecipeTree::new(base_name, base_dir.to_owned());
+    let mut root = RecipeTree::new(base_name, base_dir.to_path_buf());
 
     // First, find all .cook files in this directory and subdirectories
     let pattern = base_dir.join("**/*.cook");
-    let pattern = pattern.to_string_lossy();
+    let pattern = pattern.to_string();
 
     for entry in glob(&pattern)? {
         let path = entry?;
+        let path = Utf8PathBuf::from_path_buf(path).map_err(|_| {
+            TreeError::StripPrefixError("Path contains invalid UTF-8".to_string())
+        })?;
         let recipe = RecipeEntry::from_path(path.clone())?;
 
         // Calculate the relative path from the base directory
         let rel_path = path
             .strip_prefix(base_dir)
-            .map_err(|_| TreeError::StripPrefixError(path.display().to_string()))?;
+            .map_err(|_| TreeError::StripPrefixError(path.to_string()))?;
 
         // Build the tree structure
         let mut current = &mut root;
@@ -68,7 +71,7 @@ pub fn build_tree<P: AsRef<Path>>(base_dir: P) -> Result<RecipeTree, TreeError> 
 
         // Create directory nodes
         for component in components {
-            let name = component.as_os_str().to_string_lossy().into_owned();
+            let name = component.to_string();
             let path = current.path.join(&name);
             current = current
                 .children
@@ -93,16 +96,15 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use std::fs;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn create_test_recipe(dir: &Path, name: &str, content: &str) -> PathBuf {
+    fn create_test_recipe(dir: &Utf8Path, name: &str, content: &str) -> Utf8PathBuf {
         let path = dir.join(format!("{}.cook", name));
         fs::write(&path, content).unwrap();
         path
     }
 
-    fn create_test_image(dir: &Path, name: &str, ext: &str) -> PathBuf {
+    fn create_test_image(dir: &Utf8Path, name: &str, ext: &str) -> Utf8PathBuf {
         let path = dir.join(format!("{}.{}", name, ext));
         fs::write(&path, "dummy image content").unwrap();
         path
@@ -111,13 +113,14 @@ mod tests {
     #[test]
     fn test_empty_directory() {
         let temp_dir = TempDir::new().unwrap();
-        let tree = build_tree(temp_dir.path()).unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let tree = build_tree(&temp_dir_path).unwrap();
 
         assert_eq!(
             tree.name,
-            temp_dir.path().file_name().unwrap().to_string_lossy()
+            temp_dir_path.file_name().unwrap().to_string()
         );
-        assert_eq!(tree.path, temp_dir.path());
+        assert_eq!(tree.path, temp_dir_path);
         assert!(tree.recipe.is_none());
         assert!(tree.children.is_empty());
     }
@@ -125,8 +128,9 @@ mod tests {
     #[test]
     fn test_single_recipe() {
         let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
         create_test_recipe(
-            temp_dir.path(),
+            &temp_dir_path,
             "pancakes",
             indoc! {r#"
                 ---
@@ -136,7 +140,7 @@ mod tests {
                 Make pancakes"#},
         );
 
-        let tree = build_tree(temp_dir.path()).unwrap();
+        let tree = build_tree(&temp_dir_path).unwrap();
 
         assert_eq!(tree.children.len(), 1);
         let recipe_node = tree.children.get("pancakes").unwrap();
@@ -148,8 +152,9 @@ mod tests {
     #[test]
     fn test_recipe_with_image() {
         let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
         create_test_recipe(
-            temp_dir.path(),
+            &temp_dir_path,
             "pancakes",
             indoc! {r#"
                 ---
@@ -158,9 +163,13 @@ mod tests {
 
                 Make pancakes"#},
         );
-        create_test_image(temp_dir.path(), "pancakes", "jpg");
+        create_test_image(
+            &temp_dir_path,
+            "pancakes",
+            "jpg",
+        );
 
-        let tree = build_tree(temp_dir.path()).unwrap();
+        let tree = build_tree(&temp_dir_path).unwrap();
 
         let recipe_node = tree.children.get("pancakes").unwrap();
         assert!(recipe_node.recipe.as_ref().unwrap().title_image().is_some());
@@ -169,10 +178,11 @@ mod tests {
     #[test]
     fn test_nested_directories() {
         let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
 
         // Create nested directory structure
-        let breakfast_dir = temp_dir.path().join("breakfast");
-        let dessert_dir = temp_dir.path().join("dessert");
+        let breakfast_dir = temp_dir_path.join("breakfast");
+        let dessert_dir = temp_dir_path.join("dessert");
         fs::create_dir_all(&breakfast_dir).unwrap();
         fs::create_dir_all(&dessert_dir).unwrap();
 
@@ -208,7 +218,7 @@ mod tests {
                 Bake cake"#},
         );
 
-        let tree = build_tree(temp_dir.path()).unwrap();
+        let tree = build_tree(&temp_dir_path).unwrap();
 
         assert_eq!(tree.children.len(), 2);
 
@@ -231,7 +241,8 @@ mod tests {
     #[test]
     fn test_deeply_nested_recipe() {
         let temp_dir = TempDir::new().unwrap();
-        let deep_path = temp_dir.path().join("a/b/c/d");
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let deep_path = temp_dir_path.join("a/b/c/d");
         fs::create_dir_all(&deep_path).unwrap();
 
         create_test_recipe(
@@ -245,7 +256,7 @@ mod tests {
                 Deep recipe"#},
         );
 
-        let tree = build_tree(temp_dir.path()).unwrap();
+        let tree = build_tree(&temp_dir_path).unwrap();
 
         let a = tree.children.get("a").unwrap();
         let b = a.children.get("b").unwrap();
@@ -259,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_invalid_directory() {
-        let result = build_tree("/nonexistent/directory");
+        let result = build_tree(Utf8Path::new("/nonexistent/directory"));
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -269,10 +280,10 @@ mod tests {
 
     #[test]
     fn test_recipe_tree_new() {
-        let tree = RecipeTree::new("test".to_string(), PathBuf::from("/test/path"));
+        let tree = RecipeTree::new("test".to_string(), Utf8PathBuf::from("/test/path"));
 
         assert_eq!(tree.name, "test");
-        assert_eq!(tree.path, PathBuf::from("/test/path"));
+        assert_eq!(tree.path, Utf8PathBuf::from("/test/path"));
         assert!(tree.recipe.is_none());
         assert!(tree.children.is_empty());
     }
@@ -280,8 +291,9 @@ mod tests {
     #[test]
     fn test_recipe_tree_new_with_recipe() {
         let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
         let recipe_path = create_test_recipe(
-            temp_dir.path(),
+            &temp_dir_path,
             "test_recipe",
             indoc! {r#"
                 ---

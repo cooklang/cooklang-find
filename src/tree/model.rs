@@ -1,6 +1,6 @@
 use crate::RecipeEntry;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use camino::Utf8PathBuf;
 
 /// Represents a node in the recipe directory tree
 #[derive(Debug)]
@@ -8,7 +8,7 @@ pub struct RecipeTree {
     /// Name of the current node (directory name or recipe name)
     pub name: String,
     /// Full path to this node
-    pub path: PathBuf,
+    pub path: Utf8PathBuf,
     /// If this is a recipe, contains the Recipe struct
     pub recipe: Option<RecipeEntry>,
     /// Child directories and recipes
@@ -16,7 +16,7 @@ pub struct RecipeTree {
 }
 
 impl RecipeTree {
-    pub(crate) fn new(name: String, path: PathBuf) -> Self {
+    pub(crate) fn new(name: String, path: Utf8PathBuf) -> Self {
         RecipeTree {
             name,
             path,
@@ -25,7 +25,7 @@ impl RecipeTree {
         }
     }
 
-    pub(crate) fn new_with_recipe(name: String, path: PathBuf, recipe: RecipeEntry) -> Self {
+    pub(crate) fn new_with_recipe(name: String, path: Utf8PathBuf, recipe: RecipeEntry) -> Self {
         RecipeTree {
             name,
             path,

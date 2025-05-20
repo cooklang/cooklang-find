@@ -9,6 +9,7 @@ pub struct RecipeEntry {
     /// Optional path to the recipe file
     path: Option<Utf8PathBuf>,
     /// Cached string content of the recipe
+    #[serde(skip)]
     content: String,
     /// Cached metadata
     metadata: Metadata,

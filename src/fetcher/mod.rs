@@ -25,14 +25,11 @@ pub fn get_recipe<P: AsRef<Utf8Path>>(
         let recipe_path = if name.to_string().ends_with(".cook") {
             base_dir.as_ref().join(name)
         } else {
-            base_dir
-                .as_ref()
-                .join(format!("{}.cook", name.to_string()))
+            base_dir.as_ref().join(format!("{}.cook", name))
         };
 
         if recipe_path.exists() {
-            return RecipeEntry::from_path(recipe_path)
-                .map_err(FetchError::RecipeEntryError);
+            return RecipeEntry::from_path(recipe_path).map_err(FetchError::RecipeEntryError);
         }
     }
 
@@ -140,13 +137,19 @@ mod tests {
 
     #[test]
     fn test_get_recipe_invalid_directory() {
-        let result = get_recipe([Utf8PathBuf::from("/nonexistent/directory")], Utf8PathBuf::from("recipe"));
+        let result = get_recipe(
+            [Utf8PathBuf::from("/nonexistent/directory")],
+            Utf8PathBuf::from("recipe"),
+        );
         assert!(matches!(result, Err(FetchError::InvalidPath(_))));
     }
 
     #[test]
     fn test_get_recipe_empty_directories() {
-        let result = get_recipe(std::iter::empty::<Utf8PathBuf>(), Utf8PathBuf::from("recipe"));
+        let result = get_recipe(
+            std::iter::empty::<Utf8PathBuf>(),
+            Utf8PathBuf::from("recipe"),
+        );
         assert!(matches!(result, Err(FetchError::InvalidPath(_))));
     }
 

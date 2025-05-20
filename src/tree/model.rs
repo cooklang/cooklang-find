@@ -1,9 +1,10 @@
 use crate::RecipeEntry;
-use std::collections::HashMap;
 use camino::Utf8PathBuf;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Represents a node in the recipe directory tree
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RecipeTree {
     /// Name of the current node (directory name or recipe name)
     pub name: String,

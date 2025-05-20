@@ -1,6 +1,6 @@
 use crate::RecipeEntry;
-use glob::glob;
 use camino::{Utf8Path, Utf8PathBuf};
+use glob::glob;
 use thiserror::Error;
 
 mod model;
@@ -52,9 +52,8 @@ pub fn build_tree<P: AsRef<Utf8Path>>(base_dir: P) -> Result<RecipeTree, TreeErr
 
     for entry in glob(&pattern)? {
         let path = entry?;
-        let path = Utf8PathBuf::from_path_buf(path).map_err(|_| {
-            TreeError::StripPrefixError("Path contains invalid UTF-8".to_string())
-        })?;
+        let path = Utf8PathBuf::from_path_buf(path)
+            .map_err(|_| TreeError::StripPrefixError("Path contains invalid UTF-8".to_string()))?;
         let recipe = RecipeEntry::from_path(path.clone())?;
 
         // Calculate the relative path from the base directory
@@ -116,10 +115,7 @@ mod tests {
         let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
         let tree = build_tree(&temp_dir_path).unwrap();
 
-        assert_eq!(
-            tree.name,
-            temp_dir_path.file_name().unwrap().to_string()
-        );
+        assert_eq!(tree.name, temp_dir_path.file_name().unwrap().to_string());
         assert_eq!(tree.path, temp_dir_path);
         assert!(tree.recipe.is_none());
         assert!(tree.children.is_empty());
@@ -163,11 +159,7 @@ mod tests {
 
                 Make pancakes"#},
         );
-        create_test_image(
-            &temp_dir_path,
-            "pancakes",
-            "jpg",
-        );
+        create_test_image(&temp_dir_path, "pancakes", "jpg");
 
         let tree = build_tree(&temp_dir_path).unwrap();
 

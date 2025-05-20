@@ -1,7 +1,7 @@
 use crate::RecipeEntry;
+use camino::{Utf8Path, Utf8PathBuf};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
-use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
 mod model;

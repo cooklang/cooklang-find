@@ -1,9 +1,10 @@
-use cooklang::{CooklangParser, Metadata, ScaledRecipe};
-use std::sync::OnceLock;
 use camino::{Utf8Path, Utf8PathBuf};
+use cooklang::{CooklangParser, Metadata, ScaledRecipe};
+use serde::{Deserialize, Serialize};
+use std::sync::{Arc, OnceLock};
 use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RecipeEntry {
     /// Optional path to the recipe file
     path: Option<Utf8PathBuf>,
@@ -13,24 +14,27 @@ pub struct RecipeEntry {
     metadata: Metadata,
 
     /// Cachedd name of the recipe (from file stem or title)
+    #[serde(skip)]
     name: OnceLock<Option<String>>,
     /// Optional path to the title image
     // TODO some data structure for all images instead
+    #[serde(skip)]
     title_image: OnceLock<Option<Utf8PathBuf>>,
 
     /// Scaling factor for the recipe
+    #[serde(skip)]
     scaling_factor: OnceLock<f64>,
 
     /// Cached parsed recipe
-    // TODO scaled or not?
-    recipe: OnceLock<ScaledRecipe>,
+    #[serde(skip)]
+    recipe: OnceLock<Arc<ScaledRecipe>>,
 }
 
 impl RecipeEntry {
     /// Create a new Recipe instance from a path
     pub fn from_path(path: Utf8PathBuf) -> Result<Self, RecipeEntryError> {
         // Read the file content
-        let content = std::fs::read_to_string(&path).map_err(|e| RecipeEntryError::IoError(e))?;
+        let content = std::fs::read_to_string(&path).map_err(RecipeEntryError::IoError)?;
 
         let (metadata, _warnings) = CooklangParser::canonical()
             .parse_metadata(&content)
@@ -39,8 +43,8 @@ impl RecipeEntry {
 
         Ok(RecipeEntry {
             path: Some(path.to_path_buf()),
-            content: content,
-            metadata: metadata,
+            content,
+            metadata,
             name: OnceLock::new(),
             title_image: OnceLock::new(),
             scaling_factor: OnceLock::new(),
@@ -57,8 +61,8 @@ impl RecipeEntry {
 
         Ok(RecipeEntry {
             path: None,
-            content: content,
-            metadata: metadata,
+            content,
+            metadata,
             name: OnceLock::new(),
             title_image: OnceLock::new(),
             scaling_factor: OnceLock::new(),
@@ -89,20 +93,20 @@ impl RecipeEntry {
         })
     }
 
-    pub fn recipe(&self, scaling_factor: f64) -> &ScaledRecipe {
-        self.recipe.get_or_init(|| {
-            self.scaling_factor.set(scaling_factor).unwrap();
+    pub fn recipe(&self, scaling_factor: f64) -> Arc<ScaledRecipe> {
+        // TODO: not correct, cached recipe can be with different scaling factor
+        self.recipe
+            .get_or_init(|| {
+                self.scaling_factor.set(scaling_factor).unwrap();
 
-            let parser = CooklangParser::canonical();
+                let parser = CooklangParser::canonical();
 
-            let (recipe, _warnings) = parser
-                .parse(&self.content)
-                .into_result()
-                .unwrap();
+                let (recipe, _warnings) = parser.parse(&self.content).into_result().unwrap();
 
-            // Scale the recipe
-            recipe.scale(*self.scaling_factor(), parser.converter())
-        })
+                // Scale the recipe
+                Arc::new(recipe.scale(*self.scaling_factor(), parser.converter()))
+            })
+            .clone()
     }
 
     pub fn scaling_factor(&self) -> &f64 {

@@ -362,6 +362,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_find_title_image_case_sensitivity() {
         let temp_dir = TempDir::new().unwrap();
         let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();

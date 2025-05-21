@@ -12,6 +12,7 @@ pub struct RecipeEntry {
     #[serde(skip)]
     content: String,
     /// Cached metadata
+    // TODO: this is not correct, metadata can be different for different scaling factor
     metadata: Metadata,
 
     /// Cachedd name of the recipe (from file stem or title)

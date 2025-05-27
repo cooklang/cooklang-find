@@ -1,6 +1,6 @@
 [package]
 name = "cooklang-find"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Library for finding and managing Cooklang recipes in the filesystem"
 license = "MIT"

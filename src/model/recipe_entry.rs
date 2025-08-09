@@ -1,5 +1,5 @@
 use camino::{Utf8Path, Utf8PathBuf};
-use cooklang::{CooklangParser, Metadata, ScaledRecipe};
+use cooklang::{CooklangParser, Metadata, Recipe};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock};
 use thiserror::Error;
@@ -29,7 +29,7 @@ pub struct RecipeEntry {
 
     /// Cached parsed recipe
     #[serde(skip)]
-    recipe: OnceLock<Arc<ScaledRecipe>>,
+    recipe: OnceLock<Arc<Recipe>>,
 }
 
 impl RecipeEntry {
@@ -95,7 +95,7 @@ impl RecipeEntry {
         })
     }
 
-    pub fn recipe(&self, scaling_factor: f64) -> Arc<ScaledRecipe> {
+    pub fn recipe(&self, scaling_factor: f64) -> Arc<Recipe> {
         // TODO: not correct, cached recipe can be with different scaling factor
         self.recipe
             .get_or_init(|| {
@@ -103,10 +103,11 @@ impl RecipeEntry {
 
                 let parser = CooklangParser::canonical();
 
-                let (recipe, _warnings) = parser.parse(&self.content).into_result().unwrap();
+                let (mut recipe, _warnings) = parser.parse(&self.content).into_result().unwrap();
 
                 // Scale the recipe
-                Arc::new(recipe.scale(*self.scaling_factor(), parser.converter()))
+                recipe.scale(*self.scaling_factor(), parser.converter());
+                Arc::new(recipe)
             })
             .clone()
     }

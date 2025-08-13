@@ -46,45 +46,50 @@ pub fn build_tree<P: AsRef<Utf8Path>>(base_dir: P) -> Result<RecipeTree, TreeErr
 
     let mut root = RecipeTree::new(base_name, base_dir.to_path_buf());
 
-    // First, find all .cook files in this directory and subdirectories
-    let pattern = base_dir.join("**/*.cook");
-    let pattern = pattern.to_string();
+    // First, find all .cook and .menu files in this directory and subdirectories
+    let patterns = vec![
+        base_dir.join("**/*.cook").to_string(),
+        base_dir.join("**/*.menu").to_string(),
+    ];
 
-    for entry in glob(&pattern)? {
-        let path = entry?;
-        let path = Utf8PathBuf::from_path_buf(path)
-            .map_err(|_| TreeError::StripPrefixError("Path contains invalid UTF-8".to_string()))?;
-        let recipe = RecipeEntry::from_path(path.clone())?;
+    for pattern in patterns {
+        for entry in glob(&pattern)? {
+            let path = entry?;
+            let path = Utf8PathBuf::from_path_buf(path).map_err(|_| {
+                TreeError::StripPrefixError("Path contains invalid UTF-8".to_string())
+            })?;
+            let recipe = RecipeEntry::from_path(path.clone())?;
 
-        // Calculate the relative path from the base directory
-        let rel_path = path
-            .strip_prefix(base_dir)
-            .map_err(|_| TreeError::StripPrefixError(path.to_string()))?;
+            // Calculate the relative path from the base directory
+            let rel_path = path
+                .strip_prefix(base_dir)
+                .map_err(|_| TreeError::StripPrefixError(path.to_string()))?;
 
-        // Build the tree structure
-        let mut current = &mut root;
-        let components: Vec<_> = rel_path
-            .parent()
-            .map(|p| p.components().collect())
-            .unwrap_or_default();
+            // Build the tree structure
+            let mut current = &mut root;
+            let components: Vec<_> = rel_path
+                .parent()
+                .map(|p| p.components().collect())
+                .unwrap_or_default();
 
-        // Create directory nodes
-        for component in components {
-            let name = component.to_string();
-            let path = current.path.join(&name);
-            current = current
-                .children
-                .entry(name.clone())
-                .or_insert_with(|| RecipeTree::new(name, path));
+            // Create directory nodes
+            for component in components {
+                let name = component.to_string();
+                let path = current.path.join(&name);
+                current = current
+                    .children
+                    .entry(name.clone())
+                    .or_insert_with(|| RecipeTree::new(name, path));
+            }
+
+            // Add the recipe as a leaf node
+            let name = recipe.name().clone().unwrap();
+
+            current.children.insert(
+                name.clone(),
+                RecipeTree::new_with_recipe(name, path, recipe),
+            );
         }
-
-        // Add the recipe as a leaf node
-        let name = recipe.name().clone().unwrap();
-
-        current.children.insert(
-            name.clone(),
-            RecipeTree::new_with_recipe(name, path, recipe),
-        );
     }
 
     Ok(root)
@@ -98,13 +103,13 @@ mod tests {
     use tempfile::TempDir;
 
     fn create_test_recipe(dir: &Utf8Path, name: &str, content: &str) -> Utf8PathBuf {
-        let path = dir.join(format!("{}.cook", name));
+        let path = dir.join(format!("{name}.cook"));
         fs::write(&path, content).unwrap();
         path
     }
 
     fn create_test_image(dir: &Utf8Path, name: &str, ext: &str) -> Utf8PathBuf {
-        let path = dir.join(format!("{}.{}", name, ext));
+        let path = dir.join(format!("{name}.{ext}"));
         fs::write(&path, "dummy image content").unwrap();
         path
     }

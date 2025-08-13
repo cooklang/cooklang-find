@@ -158,14 +158,14 @@ mod tests {
     use tempfile::TempDir;
 
     fn create_test_recipe(dir: &Utf8Path, name: &str, content: &str) -> Utf8PathBuf {
-        let recipe_path = dir.join(format!("{}.cook", name));
+        let recipe_path = dir.join(format!("{name}.cook"));
         let mut file = File::create(&recipe_path).unwrap();
-        write!(file, "{}", content).unwrap();
+        write!(file, "{content}").unwrap();
         recipe_path
     }
 
     fn create_test_image(dir: &Utf8Path, name: &str, ext: &str) -> Utf8PathBuf {
-        let image_path = dir.join(format!("{}.{}", name, ext));
+        let image_path = dir.join(format!("{name}.{ext}"));
         File::create(&image_path).unwrap();
         image_path
     }
@@ -264,7 +264,7 @@ mod tests {
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
         let parsed = recipe.recipe(1.0);
 
-        assert_eq!(parsed.metadata.servings().unwrap()[0], 4);
+        assert_eq!(parsed.metadata.servings().unwrap().as_number().unwrap(), 4);
         assert_eq!(parsed.ingredients.len(), 2);
     }
 
@@ -336,11 +336,7 @@ mod tests {
             let image_path = create_test_image(&temp_dir_path, "test_recipe", ext);
             let found = find_title_image(&recipe_path);
 
-            assert!(
-                found.is_some(),
-                "Failed to find image with extension {}",
-                ext
-            );
+            assert!(found.is_some(), "Failed to find image with extension {ext}");
             assert_eq!(found.unwrap(), image_path);
         }
     }
@@ -405,7 +401,7 @@ mod tests {
 
         // Verify recipe is parsed correctly
         let parsed = recipe.recipe(1.0);
-        assert_eq!(parsed.metadata.servings().unwrap()[0], 4);
+        assert_eq!(parsed.metadata.servings().unwrap().as_number().unwrap(), 4);
         assert_eq!(parsed.ingredients.len(), 2);
     }
 }

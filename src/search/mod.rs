@@ -38,37 +38,42 @@ pub fn search(base_dir: &Utf8Path, query: &str) -> Result<Vec<RecipeEntry>, Sear
     Ok(recipes)
 }
 
-/// Search for .cook files in a directory and return scored results
+/// Search for .cook and .menu files in a directory and return scored results
 fn search_paths(base_dir: &Utf8Path, query: &str) -> Result<Vec<Utf8PathBuf>, SearchError> {
     let mut scored_results = vec![];
     let query_lower = query.to_lowercase();
     let terms: Vec<String> = query_lower.split_whitespace().map(String::from).collect();
 
-    let pattern = base_dir.join("**/*.cook");
-    let pattern = pattern.to_string();
+    // Search for both .cook and .menu files
+    let patterns = vec![
+        base_dir.join("**/*.cook").to_string(),
+        base_dir.join("**/*.menu").to_string(),
+    ];
 
-    for entry in glob::glob(&pattern)? {
-        let path = entry?;
-        let path = Utf8PathBuf::from_path_buf(path).map_err(|_| {
-            SearchError::IoError(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Path contains invalid UTF-8",
-            ))
-        })?;
-        let mut result = SearchResult::new(path);
+    for pattern in patterns {
+        for entry in glob::glob(&pattern)? {
+            let path = entry?;
+            let path = Utf8PathBuf::from_path_buf(path).map_err(|_| {
+                SearchError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Path contains invalid UTF-8",
+                ))
+            })?;
+            let mut result = SearchResult::new(path);
 
-        // Score based on filename match (using full query)
-        let filename_score = score_filename_match(&result.path, &query_lower);
-        result.add_score(filename_score);
+            // Score based on filename match (using full query)
+            let filename_score = score_filename_match(&result.path, &query_lower);
+            result.add_score(filename_score);
 
-        // Score based on content matches (using individual terms)
-        if let Ok(content_score) = score_content_matches(&result.path, &terms) {
-            result.add_score(content_score);
-        }
+            // Score based on content matches (using individual terms)
+            if let Ok(content_score) = score_content_matches(&result.path, &terms) {
+                result.add_score(content_score);
+            }
 
-        // Include result if it has any score
-        if result.score > 0.0 {
-            scored_results.push(result);
+            // Include result if it has any score
+            if result.score > 0.0 {
+                scored_results.push(result);
+            }
         }
     }
 
@@ -154,7 +159,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn create_test_recipe(dir: &Utf8Path, name: &str, content: &str) -> Utf8PathBuf {
-        let path = dir.join(format!("{}.cook", name));
+        let path = dir.join(format!("{name}.cook"));
         fs::write(&path, content).unwrap();
         path
     }

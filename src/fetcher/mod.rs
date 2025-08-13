@@ -22,10 +22,12 @@ pub fn get_recipe<P: AsRef<Utf8Path>>(
     let name = name.as_ref();
 
     for base_dir in base_dirs {
-        let recipe_path = if name.to_string().ends_with(".cook") {
+        let recipe_path = if name.extension().is_some() {
+            // If the name already has an extension, use it as-is
             base_dir.as_ref().join(name)
         } else {
-            base_dir.as_ref().join(format!("{}.cook", name))
+            // Only append .cook if there's no extension
+            base_dir.as_ref().join(format!("{name}.cook"))
         };
 
         if recipe_path.exists() {
@@ -34,6 +36,19 @@ pub fn get_recipe<P: AsRef<Utf8Path>>(
     }
 
     Err(FetchError::InvalidPath(name.to_path_buf()))
+}
+
+/// Find a recipe by name using string paths (convenience function)
+pub fn get_recipe_str(
+    base_dirs: impl IntoIterator<Item = impl AsRef<str>>,
+    name: &str,
+) -> Result<RecipeEntry, FetchError> {
+    let base_dirs: Vec<Utf8PathBuf> = base_dirs
+        .into_iter()
+        .map(|s| Utf8PathBuf::from(s.as_ref()))
+        .collect();
+    let name = Utf8PathBuf::from(name);
+    get_recipe(base_dirs, name)
 }
 
 #[cfg(test)]
@@ -47,7 +62,7 @@ mod tests {
         let path = if name.ends_with(".cook") {
             dir.join(name)
         } else {
-            dir.join(format!("{}.cook", name))
+            dir.join(format!("{name}.cook"))
         };
         fs::write(&path, content).unwrap();
         path
@@ -198,5 +213,28 @@ mod tests {
         // Should find recipe when name already includes .cook extension
         let result = get_recipe([&temp_dir_path], &Utf8PathBuf::from("pancakes.cook")).unwrap();
         assert_eq!(result.name().as_ref().unwrap(), "pancakes");
+    }
+
+    #[test]
+    fn test_get_recipe_with_menu_extension() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create a .menu file
+        let menu_path = temp_dir_path.join("weekly.menu");
+        fs::write(
+            &menu_path,
+            indoc! {r#"
+            ---
+            title: Weekly Menu
+            ---
+
+            Menu content here"#},
+        )
+        .unwrap();
+
+        // Should find file when name includes .menu extension
+        let result = get_recipe([&temp_dir_path], &Utf8PathBuf::from("weekly.menu")).unwrap();
+        assert_eq!(result.path().as_ref().unwrap(), &menu_path);
     }
 }

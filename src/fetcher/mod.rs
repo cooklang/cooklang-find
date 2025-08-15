@@ -147,7 +147,7 @@ mod tests {
 
         let result = get_recipe([&dir1_path, &dir2_path], &Utf8PathBuf::from("pancakes")).unwrap();
         assert_eq!(result.name().as_ref().unwrap(), "pancakes");
-        assert!(result.path().as_ref().unwrap().starts_with(&dir1_path)); // Should find the recipe in the first directory
+        assert!(result.path().unwrap().starts_with(&dir1_path)); // Should find the recipe in the first directory
     }
 
     #[test]
@@ -235,6 +235,6 @@ mod tests {
 
         // Should find file when name includes .menu extension
         let result = get_recipe([&temp_dir_path], &Utf8PathBuf::from("weekly.menu")).unwrap();
-        assert_eq!(result.path().as_ref().unwrap(), &menu_path);
+        assert_eq!(result.path(), Some(&menu_path));
     }
 }

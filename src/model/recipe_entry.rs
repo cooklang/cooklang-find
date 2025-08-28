@@ -6,7 +6,11 @@ use std::io::{BufRead, BufReader};
 use std::sync::OnceLock;
 use thiserror::Error;
 
-/// The source of a recipe - either from a file path or from content (e.g., stdin)
+/// Represents the source of a recipe.
+///
+/// A recipe can come from either:
+/// - A file path on the filesystem
+/// - Direct content (e.g., from stdin or programmatically created)
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "source_type")]
 pub enum RecipeSource {
@@ -19,6 +23,28 @@ pub enum RecipeSource {
     },
 }
 
+/// Represents a single recipe or menu entry.
+///
+/// This structure encapsulates all information about a recipe including:
+/// - Its source (file path or content)
+/// - Metadata extracted from YAML frontmatter
+/// - Cached computed values like name and title image
+///
+/// # Examples
+///
+/// ```no_run
+/// use cooklang_find::RecipeEntry;
+/// use camino::Utf8PathBuf;
+///
+/// // Load a recipe from a file
+/// let recipe = RecipeEntry::from_path(Utf8PathBuf::from("recipes/pancakes.cook"))?;
+///
+/// // Access recipe information
+/// let name = recipe.name();
+/// let metadata = recipe.metadata();
+/// let content = recipe.content()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecipeEntry {
     /// Source of the recipe (path or content)
@@ -33,10 +59,26 @@ pub struct RecipeEntry {
     // TODO some data structure for all images instead
     #[serde(skip)]
     title_image: OnceLock<Option<String>>,
+    /// Whether this is a menu file (*.menu) rather than a regular recipe
+    #[serde(skip)]
+    is_menu: OnceLock<bool>,
 }
 
 impl RecipeEntry {
-    /// Create a new Recipe instance from a path
+    /// Creates a new `RecipeEntry` from a file path.
+    ///
+    /// Reads the recipe file, extracts metadata from YAML frontmatter,
+    /// and creates a fully initialized recipe entry.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to the recipe file (.cook or .menu)
+    ///
+    /// # Errors
+    ///
+    /// Returns `RecipeEntryError` if:
+    /// - The file cannot be read
+    /// - The metadata cannot be parsed
     pub fn from_path(path: Utf8PathBuf) -> Result<Self, RecipeEntryError> {
         let file = File::open(&path).map_err(RecipeEntryError::IoError)?;
         let reader = BufReader::new(file);
@@ -50,10 +92,23 @@ impl RecipeEntry {
             metadata,
             name: OnceLock::new(),
             title_image: OnceLock::new(),
+            is_menu: OnceLock::new(),
         })
     }
 
-    /// Create a new Recipe instance from content (e.g., stdin)
+    /// Creates a new `RecipeEntry` from string content.
+    ///
+    /// This method is useful for creating recipes from sources other than files,
+    /// such as stdin, network responses, or programmatically generated content.
+    ///
+    /// # Arguments
+    ///
+    /// * `content` - The full recipe content including any YAML frontmatter
+    /// * `name` - Optional name for the recipe (used if no title in metadata)
+    ///
+    /// # Errors
+    ///
+    /// Returns `RecipeEntryError` if the metadata cannot be parsed.
     pub fn from_content(content: String, name: Option<String>) -> Result<Self, RecipeEntryError> {
         let metadata = extract_and_parse_metadata(
             content
@@ -66,9 +121,18 @@ impl RecipeEntry {
             metadata,
             name: OnceLock::new(),
             title_image: OnceLock::new(),
+            is_menu: OnceLock::new(),
         })
     }
 
+    /// Returns the name of the recipe.
+    ///
+    /// The name is determined in the following priority order:
+    /// 1. Title from metadata (if present)
+    /// 2. File stem (for path-based recipes)
+    /// 3. Provided name (for content-based recipes)
+    ///
+    /// The result is cached after the first call.
     pub fn name(&self) -> &Option<String> {
         self.name.get_or_init(|| {
             if let Some(title) = self.metadata.title() {
@@ -82,6 +146,15 @@ impl RecipeEntry {
         })
     }
 
+    /// Returns the URL or path to the recipe's title image.
+    ///
+    /// The image is determined in the following priority order:
+    /// 1. Image URL from metadata (image, images, picture, or pictures fields)
+    /// 2. Image file with same stem as recipe (for path-based recipes)
+    ///
+    /// Supported image extensions: jpg, jpeg, png, webp
+    ///
+    /// The result is cached after the first call.
     pub fn title_image(&self) -> &Option<String> {
         self.title_image.get_or_init(|| {
             // First check metadata for image URLs
@@ -97,7 +170,15 @@ impl RecipeEntry {
         })
     }
 
-    /// Get the raw content of the recipe
+    /// Returns the full content of the recipe.
+    ///
+    /// For path-based recipes, this reads the file from disk.
+    /// For content-based recipes, this returns the stored content.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RecipeEntryError::IoError` if the file cannot be read
+    /// (only applicable for path-based recipes).
     pub fn content(&self) -> Result<String, RecipeEntryError> {
         match &self.source {
             RecipeSource::Path { path } => {
@@ -107,20 +188,49 @@ impl RecipeEntry {
         }
     }
 
-    /// Get the metadata
+    /// Returns a reference to the recipe's metadata.
+    ///
+    /// The metadata contains all fields from the YAML frontmatter,
+    /// providing access to both standard fields (title, servings, tags)
+    /// and any custom fields defined in the recipe.
     pub fn metadata(&self) -> &Metadata {
         &self.metadata
     }
 
-    /// Get the path if this recipe is backed by a file
+    /// Returns the file path if this recipe is backed by a file.
+    ///
+    /// Returns `None` for recipes created from content.
     pub fn path(&self) -> Option<&Utf8PathBuf> {
         match &self.source {
             RecipeSource::Path { path } => Some(path),
             RecipeSource::Content { .. } => None,
         }
     }
+
+    /// Returns the recipe's tags from metadata.
+    ///
+    /// Tags can be defined in metadata as:
+    /// - A comma-separated string: `tags: "breakfast, easy, vegetarian"`
+    /// - An array: `tags: [breakfast, easy, vegetarian]`
+    ///
+    /// Returns an empty vector if no tags are defined.
+    pub fn tags(&self) -> Vec<String> {
+        self.metadata.tags()
+    }
+
+    /// Checks if this entry represents a menu file.
+    ///
+    /// Returns `true` if the file has a .menu extension,
+    /// `false` otherwise (including content-based recipes).
+    pub fn is_menu(&self) -> bool {
+        *self.is_menu.get_or_init(|| match &self.source {
+            RecipeSource::Path { path } => path.extension() == Some("menu"),
+            RecipeSource::Content { .. } => false,
+        })
+    }
 }
 
+/// Errors that can occur when working with recipe entries.
 #[derive(Error, Debug)]
 pub enum RecipeEntryError {
     #[error("Failed to read recipe file: {0}")]

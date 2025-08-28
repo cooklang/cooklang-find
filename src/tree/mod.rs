@@ -1,4 +1,9 @@
-use crate::RecipeEntry;
+//! Recipe tree building for directory hierarchies.
+//!
+//! This module provides functionality to build hierarchical tree structures
+//! that represent the organization of recipe files within a directory tree.
+
+use crate::model::{RecipeEntry, RecipeEntryError};
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::glob;
 use thiserror::Error;
@@ -6,6 +11,7 @@ use thiserror::Error;
 mod model;
 pub use model::RecipeTree;
 
+/// Errors that can occur when building a recipe tree.
 #[derive(Error, Debug)]
 pub enum TreeError {
     #[error("Directory does not exist: {0}")]
@@ -21,13 +27,44 @@ pub enum TreeError {
     PatternError(#[from] glob::PatternError),
 
     #[error("Failed to process recipe: {0}")]
-    RecipeEntryError(#[from] crate::RecipeEntryError),
+    RecipeEntryError(#[from] RecipeEntryError),
 
     #[error("Failed to strip prefix from path: {0}")]
     StripPrefixError(String),
 }
 
-/// Build a tree structure of recipes and directories for a given base directory
+/// Builds a hierarchical tree structure of all recipes in a directory.
+///
+/// This function recursively scans the specified directory and all its
+/// subdirectories for .cook and .menu files, organizing them into a tree
+/// structure that mirrors the filesystem hierarchy.
+///
+/// # Arguments
+///
+/// * `base_dir` - The root directory to build the tree from
+///
+/// # Returns
+///
+/// Returns a `RecipeTree` representing the directory structure with all
+/// recipes loaded, or a `TreeError` if the operation fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// use cooklang_find::build_tree;
+/// use camino::Utf8Path;
+///
+/// // Build a tree of all recipes in a directory
+/// let tree = build_tree(Utf8Path::new("./recipes"))?;
+///
+/// // Access recipes in the tree
+/// for (name, node) in &tree.children {
+///     if let Some(recipe) = &node.recipe {
+///         println!("Found recipe: {}", name);
+///     }
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn build_tree<P: AsRef<Utf8Path>>(base_dir: P) -> Result<RecipeTree, TreeError> {
     let base_dir = base_dir.as_ref();
 

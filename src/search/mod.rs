@@ -1,4 +1,9 @@
-use crate::RecipeEntry;
+//! Recipe searching functionality.
+//!
+//! This module provides full-text search capabilities for recipe files,
+//! supporting both filename and content matching with relevance scoring.
+
+use crate::model::{RecipeEntry, RecipeEntryError};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
@@ -6,8 +11,9 @@ use thiserror::Error;
 
 mod model;
 
-use model::*;
+pub use model::SearchResult;
 
+/// Errors that can occur during recipe searching.
 #[derive(Error, Debug)]
 pub enum SearchError {
     #[error("Failed to read directory: {0}")]
@@ -17,13 +23,44 @@ pub enum SearchError {
     PatternError(#[from] glob::PatternError),
 
     #[error("Failed to process recipe: {0}")]
-    RecipeEntryError(#[from] crate::RecipeEntryError),
+    RecipeEntryError(#[from] RecipeEntryError),
 
     #[error("Failed to read file: {0}")]
     IoError(#[from] std::io::Error),
 }
 
-/// Search for recipes containing the exact given text
+/// Searches for recipes in a directory tree that match a query string.
+///
+/// This function performs a comprehensive search through all .cook and .menu files
+/// in the specified directory and its subdirectories. The search algorithm:
+///
+/// 1. Searches for exact and partial filename matches (highest priority)
+/// 2. Searches for query terms within file contents
+/// 3. Scores and ranks results by relevance
+///
+/// # Arguments
+///
+/// * `base_dir` - The root directory to search in
+/// * `query` - The search query (can contain multiple terms separated by spaces)
+///
+/// # Returns
+///
+/// Returns a vector of `RecipeEntry` objects sorted by relevance score,
+/// with the most relevant recipes first.
+///
+/// # Examples
+///
+/// ```no_run
+/// use cooklang_find::search;
+/// use camino::Utf8Path;
+///
+/// // Search for recipes containing "chocolate"
+/// let results = search(Utf8Path::new("./recipes"), "chocolate")?;
+///
+/// // Search with multiple terms
+/// let results = search(Utf8Path::new("./recipes"), "chocolate cake")?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn search(base_dir: &Utf8Path, query: &str) -> Result<Vec<RecipeEntry>, SearchError> {
     let paths = search_paths(base_dir, query)?;
     let mut recipes = Vec::new();
@@ -107,7 +144,7 @@ fn score_content_matches(path: &Utf8Path, terms: &[String]) -> io::Result<f64> {
         // Base score for having any match
         let mut score = 1.0;
         // Additional score for multiple matches (capped)
-        score += (0.1 * matches as f64).min(5.0);
+        score += f64::min(0.1 * matches as f64, 5.0);
         Ok(score)
     } else {
         Ok(0.0)

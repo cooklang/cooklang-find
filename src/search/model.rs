@@ -1,6 +1,9 @@
 use camino::Utf8PathBuf;
 
-/// A search result with its relevance score
+/// Represents a search result with its relevance score.
+///
+/// Used internally by the search algorithm to rank results
+/// by relevance before returning them to the caller.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchResult {
     pub path: Utf8PathBuf,

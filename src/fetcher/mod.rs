@@ -1,20 +1,54 @@
-use crate::RecipeEntry;
+//! Recipe fetching functionality.
+//!
+//! This module provides functions for finding and loading recipe files
+//! from the filesystem. It supports searching multiple directories and
+//! automatically handles both .cook and .menu file extensions.
+
+use crate::model::{RecipeEntry, RecipeEntryError};
 use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
+/// Errors that can occur when fetching recipes.
 #[derive(Error, Debug)]
 pub enum FetchError {
     #[error("Failed to read recipe file: {0}")]
     IoError(#[from] std::io::Error),
 
     #[error("Failed to parse recipe: {0}")]
-    RecipeEntryError(#[from] crate::RecipeEntryError),
+    RecipeEntryError(#[from] RecipeEntryError),
 
     #[error("Invalid recipe path: {0}")]
     InvalidPath(Utf8PathBuf),
 }
 
-/// Find a recipe by name
+/// Searches for and loads a recipe by name from the specified directories.
+///
+/// This function searches through the provided base directories in order,
+/// looking for a recipe file that matches the given name. It supports:
+/// - Direct file paths with extensions (e.g., "recipe.cook", "menu.menu")
+/// - Names without extensions (automatically tries .cook and .menu)
+///
+/// # Arguments
+///
+/// * `base_dirs` - An iterator of directory paths to search in order
+/// * `name` - The recipe name or path to search for
+///
+/// # Returns
+///
+/// Returns the first matching `RecipeEntry` found, or a `FetchError` if no
+/// matching recipe is found in any of the directories.
+///
+/// # Examples
+///
+/// ```no_run
+/// use cooklang_find::get_recipe;
+/// use camino::Utf8PathBuf;
+///
+/// // Search for "pancakes.cook" or "pancakes.menu" in multiple directories
+/// let dirs = vec![Utf8PathBuf::from("./recipes"), Utf8PathBuf::from("./meals")];
+/// let recipe = get_recipe(dirs, Utf8PathBuf::from("pancakes"))?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn get_recipe<P: AsRef<Utf8Path>>(
     base_dirs: impl IntoIterator<Item = P>,
     name: P,
@@ -22,23 +56,48 @@ pub fn get_recipe<P: AsRef<Utf8Path>>(
     let name = name.as_ref();
 
     for base_dir in base_dirs {
-        let recipe_path = if name.extension().is_some() {
+        if name.extension().is_some() {
             // If the name already has an extension, use it as-is
-            base_dir.as_ref().join(name)
+            let recipe_path = base_dir.as_ref().join(name);
+            if recipe_path.exists() {
+                return RecipeEntry::from_path(recipe_path).map_err(FetchError::RecipeEntryError);
+            }
         } else {
-            // Only append .cook if there's no extension
-            base_dir.as_ref().join(format!("{name}.cook"))
-        };
+            // Try both .cook and .menu extensions
+            let cook_path = base_dir.as_ref().join(format!("{name}.cook"));
+            if cook_path.exists() {
+                return RecipeEntry::from_path(cook_path).map_err(FetchError::RecipeEntryError);
+            }
 
-        if recipe_path.exists() {
-            return RecipeEntry::from_path(recipe_path).map_err(FetchError::RecipeEntryError);
+            let menu_path = base_dir.as_ref().join(format!("{name}.menu"));
+            if menu_path.exists() {
+                return RecipeEntry::from_path(menu_path).map_err(FetchError::RecipeEntryError);
+            }
         }
     }
 
     Err(FetchError::InvalidPath(name.to_path_buf()))
 }
 
-/// Find a recipe by name using string paths (convenience function)
+/// Convenience function to search for recipes using string paths.
+///
+/// This is a wrapper around `get_recipe` that accepts string references
+/// instead of `Utf8Path` types, making it easier to use with string literals.
+///
+/// # Arguments
+///
+/// * `base_dirs` - An iterator of directory path strings to search
+/// * `name` - The recipe name to search for
+///
+/// # Examples
+///
+/// ```no_run
+/// use cooklang_find::get_recipe_str;
+///
+/// // Search using string paths
+/// let recipe = get_recipe_str(vec!["./recipes", "./meals"], "pancakes")?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn get_recipe_str(
     base_dirs: impl IntoIterator<Item = impl AsRef<str>>,
     name: &str,

@@ -2,7 +2,28 @@ use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use std::collections::HashMap;
 
-/// Simple metadata structure that holds YAML frontmatter data
+/// Represents metadata extracted from recipe/menu YAML frontmatter.
+///
+/// This structure provides convenient access to common metadata fields
+/// like title, servings, tags, and images, while also allowing access
+/// to any custom metadata fields through the `get()` method.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use cooklang_find::Metadata;
+/// # let metadata: Metadata = Default::default();
+/// // Access common metadata fields
+/// let title = metadata.title();
+/// let servings = metadata.servings();
+/// let tags = metadata.tags();
+/// let image_url = metadata.image_url();
+///
+/// // Access custom fields
+/// if let Some(cuisine) = metadata.get("cuisine") {
+///     println!("Cuisine: {:?}", cuisine);
+/// }
+/// ```
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Metadata {
     #[serde(flatten)]
@@ -10,24 +31,47 @@ pub struct Metadata {
 }
 
 impl Metadata {
-    /// Get the title from metadata
+    /// Returns the recipe title from metadata.
+    ///
+    /// Returns `None` if no title field is present in the metadata.
     pub fn title(&self) -> Option<&str> {
         self.data.get("title").and_then(|v| v.as_str())
     }
 
-    /// Get a value from metadata
+    /// Returns a metadata value by key.
+    ///
+    /// This method provides access to any metadata field, including
+    /// custom fields not covered by the convenience methods.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The metadata field name to retrieve
+    ///
+    /// # Returns
+    ///
+    /// Returns the YAML value if the key exists, or `None` otherwise.
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.data.get(key)
     }
 
-    /// Get the servings value
+    /// Returns the number of servings from metadata.
+    ///
+    /// Returns `None` if no servings field is present or if it's not a number.
     pub fn servings(&self) -> Option<i64> {
         self.data.get("servings").and_then(|v| v.as_i64())
     }
 
-    /// Get image URL from metadata
-    /// Checks keys: image, images, picture, pictures
-    /// If value is an array, returns the first element
+    /// Returns the primary image URL from metadata.
+    ///
+    /// Searches for image URLs in the following metadata keys (in order):
+    /// - `image` (string)
+    /// - `images` (array - returns first element)
+    /// - `picture` (string)
+    /// - `pictures` (array - returns first element)
+    ///
+    /// # Returns
+    ///
+    /// Returns the first image URL found, or `None` if no image fields exist.
     pub fn image_url(&self) -> Option<String> {
         const IMAGE_KEYS: &[&str] = &["image", "images", "picture", "pictures"];
 
@@ -48,6 +92,40 @@ impl Metadata {
             }
         }
         None
+    }
+
+    /// Returns all tags from metadata.
+    ///
+    /// Searches for tags in the following metadata keys (in order):
+    /// - `tags` (comma-separated string or array)
+    /// - `tag` (comma-separated string or array)
+    ///
+    /// # Returns
+    ///
+    /// Returns a vector of tag strings. Returns an empty vector if no tags are found.
+    pub fn tags(&self) -> Vec<String> {
+        const TAG_KEYS: &[&str] = &["tags", "tag"];
+
+        for key in TAG_KEYS {
+            if let Some(value) = self.data.get(*key) {
+                // If it's a string, split by comma and return
+                if let Some(tag_str) = value.as_str() {
+                    return tag_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
+                // If it's an array, return all string elements
+                if let Some(arr) = value.as_sequence() {
+                    return arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect();
+                }
+            }
+        }
+        Vec::new()
     }
 }
 
@@ -85,7 +163,10 @@ where
         let line = line_result?;
         if line.trim().eq("---") {
             // Found closing marker, return the YAML content
-            return Ok(Some(yaml_lines.join("\n")));
+            return Ok(Some(yaml_lines.join(
+                "
+",
+            )));
         }
         yaml_lines.push(line);
         // Prevent reading too many lines
@@ -116,7 +197,8 @@ mod tests {
     #[test]
     fn test_parse_yaml_content() {
         // Test valid YAML
-        let yaml_content = "title: Test Recipe\nservings: 4";
+        let yaml_content = "title: Test Recipe
+servings: 4";
         let metadata = parse_yaml_content(yaml_content);
         assert!(metadata.is_some());
         let metadata = metadata.unwrap();

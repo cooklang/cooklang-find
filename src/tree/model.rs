@@ -1,9 +1,23 @@
-use crate::RecipeEntry;
+use crate::model::RecipeEntry;
 use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Represents a node in the recipe directory tree
+/// Represents a node in a hierarchical recipe directory tree.
+///
+/// Each node can represent either:
+/// - A directory (with `recipe` = None and potentially non-empty `children`)
+/// - A recipe file (with `recipe` = Some and empty `children`)
+///
+/// The tree structure mirrors the filesystem hierarchy, making it easy to
+/// navigate and display recipes organized by their directory structure.
+///
+/// # Fields
+///
+/// * `name` - The name of this node (directory or recipe name)
+/// * `path` - The full filesystem path to this node
+/// * `recipe` - Optional recipe data if this node represents a recipe file
+/// * `children` - Child nodes indexed by their names
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecipeTree {
     /// Name of the current node (directory name or recipe name)

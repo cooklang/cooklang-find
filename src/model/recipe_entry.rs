@@ -1,10 +1,75 @@
 use super::metadata::{extract_and_parse_metadata, Metadata};
 use camino::{Utf8Path, Utf8PathBuf};
+use glob::glob;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 use std::sync::OnceLock;
 use thiserror::Error;
+
+/// Represents the complete collection of step images for a recipe.
+///
+/// Images are discovered based on the Cooklang naming convention:
+/// - `RecipeName.N.ext`: Stored at [0][N-1] (section 0 = linear/no section)
+/// - `RecipeName.S.N.ext`: Stored at [S-1][N-1] (section S, step N)
+///
+/// File numbering is one-indexed (Recipe.1.jpg = first step)
+/// Internal HashMap keys are zero-indexed
+/// Section 0 is reserved for linear recipes without sections.
+///
+/// Supported extensions: jpg, jpeg, png, webp
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct StepImageCollection {
+    /// Two-dimensional map: section_index -> step_index -> image_path
+    /// - Section 0: steps for linear recipes (Recipe.N.ext stored at [0][N-1])
+    /// - Section 1+: steps within sections (Recipe.S.N.ext stored at [S-1][N-1])
+    ///
+    /// HashMap keys are zero-indexed
+    pub images: HashMap<usize, HashMap<usize, String>>,
+}
+
+impl StepImageCollection {
+    /// Returns true if there are any images in the collection
+    pub fn is_empty(&self) -> bool {
+        self.images.is_empty()
+    }
+
+    /// Returns total count of all images across all sections
+    pub fn count(&self) -> usize {
+        self.images.values().map(|steps| steps.len()).sum()
+    }
+
+    /// Gets an image for a specific section and step.
+    ///
+    /// # Arguments
+    /// * `section` - Section number (0 for linear recipes, 1+ for sectioned recipes, one-indexed for sections)
+    /// * `step` - One-indexed step number (1 = first step)
+    ///
+    /// # Returns
+    /// Image path if found, None otherwise
+    ///
+    /// # Examples
+    /// ```
+    /// # use cooklang_find::StepImageCollection;
+    /// # let images = StepImageCollection::default();
+    /// // Get step 3 in linear recipe (Recipe.3.jpg stored at [0][2])
+    /// let img = images.get(0, 3);
+    ///
+    /// // Get section 2, step 4 (Recipe.2.4.jpg stored at [1][3])
+    /// let img = images.get(2, 4);
+    /// ```
+    pub fn get(&self, section: usize, step: usize) -> Option<&String> {
+        if step == 0 {
+            return None; // Steps are one-indexed
+        }
+        // For section 0 (linear recipes), use section index 0
+        // For section 1+, convert to zero-indexed (section - 1)
+        let section_idx = if section == 0 { 0 } else { section - 1 };
+        self.images.get(&section_idx)?.get(&(step - 1))
+    }
+}
 
 /// Represents the source of a recipe.
 ///
@@ -56,9 +121,11 @@ pub struct RecipeEntry {
     #[serde(skip)]
     name: OnceLock<Option<String>>,
     /// Optional path or URL to the title image
-    // TODO some data structure for all images instead
     #[serde(skip)]
     title_image: OnceLock<Option<String>>,
+    /// Cached step and section images
+    #[serde(skip)]
+    step_images: OnceLock<StepImageCollection>,
     /// Whether this is a menu file (*.menu) rather than a regular recipe
     #[serde(skip)]
     is_menu: OnceLock<bool>,
@@ -92,6 +159,7 @@ impl RecipeEntry {
             metadata,
             name: OnceLock::new(),
             title_image: OnceLock::new(),
+            step_images: OnceLock::new(),
             is_menu: OnceLock::new(),
         })
     }
@@ -121,6 +189,7 @@ impl RecipeEntry {
             metadata,
             name: OnceLock::new(),
             title_image: OnceLock::new(),
+            step_images: OnceLock::new(),
             is_menu: OnceLock::new(),
         })
     }
@@ -238,6 +307,57 @@ impl RecipeEntry {
             RecipeSource::Content { .. } => false,
         })
     }
+
+    /// Returns all step and section images for the recipe.
+    ///
+    /// Images follow the Cooklang naming convention (one-indexed):
+    /// - `RecipeName.N.ext`: Step N in linear recipe (stored at section 0)
+    /// - `RecipeName.S.N.ext`: Section S, step N within section
+    ///
+    /// All step and section numbers are one-indexed (first step/section is 1).
+    ///
+    /// Supported extensions: jpg, jpeg, png, webp (in priority order)
+    ///
+    /// The result is cached after the first call.
+    ///
+    /// # Returns
+    ///
+    /// Reference to StepImageCollection containing all discovered images.
+    /// For content-based recipes, returns an empty collection.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use cooklang_find::RecipeEntry;
+    /// use camino::Utf8PathBuf;
+    ///
+    /// let recipe = RecipeEntry::from_path(Utf8PathBuf::from("recipes/pasta.cook"))?;
+    /// let images = recipe.step_images();
+    ///
+    /// // Access linear step image (Pasta.3.jpg)
+    /// if let Some(img) = images.get(0, 3) {
+    ///     println!("Step 3 image: {}", img);
+    /// }
+    ///
+    /// // Access section-step image (Pasta.2.4.jpg)
+    /// if let Some(img) = images.get(2, 4) {
+    ///     println!("Section 2, Step 4 image: {}", img);
+    /// }
+    ///
+    /// // Direct HashMap access for iteration
+    /// if let Some(section_steps) = images.images.get(&1) {
+    ///     for (step_idx, img_path) in section_steps {
+    ///         println!("Section 2, Step {}: {}", step_idx + 1, img_path);
+    ///     }
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn step_images(&self) -> &StepImageCollection {
+        self.step_images.get_or_init(|| match &self.source {
+            RecipeSource::Path { path } => find_step_images(path),
+            RecipeSource::Content { .. } => StepImageCollection::default(),
+        })
+    }
 }
 
 /// Errors that can occur when working with recipe entries.
@@ -267,6 +387,115 @@ fn find_title_image(path: &Utf8Path) -> Option<Utf8PathBuf> {
             None
         }
     })
+}
+
+/// Discovers all step and section images for a recipe file.
+///
+/// Uses glob patterns to find images matching these patterns:
+/// - `Recipe.N.ext` (where N is 1+, one-indexed) → stored at [0][N-1]
+/// - `Recipe.S.N.ext` (where S and N are 1+, one-indexed) → stored at [S-1][N-1]
+///
+/// Images are discovered purely by filename pattern. No recipe parsing required.
+///
+/// # Arguments
+///
+/// * `path` - Path to the recipe file
+///
+/// # Returns
+///
+/// StepImageCollection containing all discovered images
+fn find_step_images(path: &Utf8Path) -> StepImageCollection {
+    let mut collection = StepImageCollection::default();
+    let stem = match path.file_stem() {
+        Some(s) => s,
+        None => return collection,
+    };
+    let dir = path.parent().unwrap_or(path);
+    let extensions = ["jpg", "jpeg", "png", "webp"];
+
+    // Build glob pattern for images: Recipe.*.ext and Recipe.*.*.ext
+    // Pattern matches: Recipe.1.jpg, Recipe.2.4.png, etc.
+    for ext in &extensions {
+        let pattern = dir.join(format!("{}.*.{}", stem, ext));
+        let pattern_str = pattern.as_str();
+
+        if let Ok(entries) = glob(pattern_str) {
+            for entry in entries.flatten() {
+                if let Some(numbers) = parse_image_numbers(&entry, stem, ext) {
+                    let entry_str = entry.to_string_lossy().to_string();
+
+                    match numbers.len() {
+                        // Single number: Recipe.N.ext
+                        1 => {
+                            let step_num = numbers[0]; // One-indexed from filename
+                                                       // Store in section 0 for linear recipes
+                                                       // Recipe.1.ext -> [0][0], Recipe.3.ext -> [0][2]
+                            collection
+                                .images
+                                .entry(0)
+                                .or_insert_with(HashMap::new)
+                                .entry(step_num - 1) // Convert to zero-indexed
+                                .or_insert(entry_str);
+                        }
+                        // Two numbers: Recipe.S.N.ext
+                        2 => {
+                            let (section_num, step_num) = (numbers[0], numbers[1]); // One-indexed
+                                                                                    // Recipe.2.4.ext -> [1][3]
+                            collection
+                                .images
+                                .entry(section_num - 1) // Convert to zero-indexed
+                                .or_insert_with(HashMap::new)
+                                .entry(step_num - 1) // Convert to zero-indexed
+                                .or_insert(entry_str);
+                        }
+                        _ => {} // Ignore invalid patterns
+                    }
+                }
+            }
+        }
+    }
+
+    collection
+}
+
+/// Parses step/section numbers from an image filename.
+///
+/// Examples:
+/// - "Recipe.3.jpg" -> Some(vec![3])
+/// - "Recipe.2.4.jpg" -> Some(vec![2, 4])
+/// - "Recipe.invalid.jpg" -> None
+///
+/// # Arguments
+///
+/// * `path` - Path to the image file
+/// * `stem` - Recipe file stem (e.g., "Recipe")
+/// * `ext` - Image extension (e.g., "jpg")
+///
+/// # Returns
+///
+/// Vector of one-indexed numbers if valid, None otherwise
+fn parse_image_numbers(path: &Path, stem: &str, ext: &str) -> Option<Vec<usize>> {
+    let filename = path.file_name()?.to_str()?;
+
+    // Remove the stem and extension to get just the number part(s)
+    // Example: "Recipe.2.4.jpg" -> ".2.4."
+    let without_stem = filename.strip_prefix(stem)?;
+    let without_ext = without_stem.strip_suffix(&format!(".{}", ext))?;
+
+    // Split by dots and parse numbers
+    // Example: ".2.4." -> ["", "2", "4", ""]
+    let numbers: Vec<usize> = without_ext
+        .split('.')
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse::<usize>().ok())
+        .collect();
+
+    // Only accept 1 or 2 numbers, and they must be >= 1 (one-indexed)
+    if !numbers.is_empty() && numbers.len() <= 2 && numbers.iter().all(|&n| n >= 1) {
+        Some(numbers)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -639,5 +868,260 @@ mod tests {
 
         // Should find the image with uppercase extension
         assert!(found_image.is_some());
+    }
+
+    // ========== Tests for StepImageCollection ==========
+
+    #[test]
+    fn test_step_image_collection_empty() {
+        let collection = StepImageCollection::default();
+        assert!(collection.is_empty());
+        assert_eq!(collection.count(), 0);
+        assert_eq!(collection.get(0, 1), None);
+    }
+
+    #[test]
+    fn test_step_image_collection_get_zero_step() {
+        let mut collection = StepImageCollection::default();
+        collection
+            .images
+            .entry(0)
+            .or_insert_with(HashMap::new)
+            .insert(0, "test.jpg".to_string());
+
+        // Step 0 should return None (steps are one-indexed)
+        assert_eq!(collection.get(0, 0), None);
+    }
+
+    #[test]
+    fn test_recipe_with_linear_step_images() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", "Test content");
+
+        // Create step images: Recipe.1.jpg, Recipe.3.jpg, Recipe.5.jpg
+        create_test_image(&temp_dir_path, "test_recipe.1", "jpg");
+        create_test_image(&temp_dir_path, "test_recipe.3", "jpg");
+        create_test_image(&temp_dir_path, "test_recipe.5", "jpg");
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let images = recipe.step_images();
+
+        assert!(!images.is_empty());
+        assert_eq!(images.count(), 3);
+
+        // Verify images are stored at correct indices (one-indexed access, zero-indexed storage)
+        assert!(images.get(0, 1).is_some()); // Recipe.1.jpg at [0][0]
+        assert!(images.get(0, 2).is_none()); // No Recipe.2.jpg
+        assert!(images.get(0, 3).is_some()); // Recipe.3.jpg at [0][2]
+        assert!(images.get(0, 5).is_some()); // Recipe.5.jpg at [0][4]
+
+        // Verify actual paths
+        let img1 = images.get(0, 1).unwrap();
+        assert!(img1.contains("test_recipe.1.jpg"));
+    }
+
+    #[test]
+    fn test_recipe_with_section_step_images() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", "Test content");
+
+        // Create section-step images: Recipe.2.4.jpg, Recipe.1.1.jpg
+        create_test_image(&temp_dir_path, "test_recipe.2.4", "jpg");
+        create_test_image(&temp_dir_path, "test_recipe.1.1", "jpg");
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let images = recipe.step_images();
+
+        assert!(!images.is_empty());
+        assert_eq!(images.count(), 2);
+
+        // Recipe.2.4.jpg should be at section 2, step 4 (stored at [1][3])
+        assert!(images.get(2, 4).is_some());
+        let img = images.get(2, 4).unwrap();
+        assert!(img.contains("test_recipe.2.4.jpg"));
+
+        // Recipe.1.1.jpg should be at section 1, step 1 (stored at [0][0])
+        assert!(images.get(1, 1).is_some());
+        let img = images.get(1, 1).unwrap();
+        assert!(img.contains("test_recipe.1.1.jpg"));
+    }
+
+    #[test]
+    fn test_recipe_with_mixed_image_types() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", "Test content");
+
+        // Create mixed images: title, linear step, and section-step
+        create_test_image(&temp_dir_path, "test_recipe", "jpg"); // title
+        create_test_image(&temp_dir_path, "test_recipe.2", "jpg"); // linear step 2
+        create_test_image(&temp_dir_path, "test_recipe.2.4", "jpg"); // section 2, step 4
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+
+        // Title image should work
+        assert!(recipe.title_image().is_some());
+
+        // Step images should work
+        let images = recipe.step_images();
+        assert_eq!(images.count(), 2);
+
+        // Recipe.2.jpg is stored at [0][1] (section 0 = linear)
+        assert!(images.get(0, 2).is_some());
+
+        // Recipe.2.4.jpg is stored at [1][3] (section 2, step 4)
+        assert!(images.get(2, 4).is_some());
+    }
+
+    #[test]
+    fn test_recipe_step_images_all_extensions() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", "Test content");
+
+        // Create images with different extensions
+        create_test_image(&temp_dir_path, "test_recipe.1", "jpg");
+        create_test_image(&temp_dir_path, "test_recipe.2", "jpeg");
+        create_test_image(&temp_dir_path, "test_recipe.3", "png");
+        create_test_image(&temp_dir_path, "test_recipe.4", "webp");
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let images = recipe.step_images();
+
+        assert_eq!(images.count(), 4);
+        assert!(images.get(0, 1).unwrap().ends_with(".jpg"));
+        assert!(images.get(0, 2).unwrap().ends_with(".jpeg"));
+        assert!(images.get(0, 3).unwrap().ends_with(".png"));
+        assert!(images.get(0, 4).unwrap().ends_with(".webp"));
+    }
+
+    #[test]
+    fn test_recipe_step_image_extension_priority() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", "Test content");
+
+        // Create multiple extensions for same step - jpg should take priority
+        create_test_image(&temp_dir_path, "test_recipe.1", "jpg");
+        create_test_image(&temp_dir_path, "test_recipe.1", "png");
+        create_test_image(&temp_dir_path, "test_recipe.1", "webp");
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let images = recipe.step_images();
+
+        assert_eq!(images.count(), 1);
+        assert!(images.get(0, 1).unwrap().ends_with(".jpg"));
+    }
+
+    #[test]
+    fn test_recipe_from_content_no_step_images() {
+        let content = indoc! {r#"
+            ---
+            servings: 4
+            ---
+
+            Test recipe content"#};
+
+        let recipe = RecipeEntry::from_content(content.to_string(), None).unwrap();
+        let images = recipe.step_images();
+
+        assert!(images.is_empty());
+        assert_eq!(images.count(), 0);
+    }
+
+    #[test]
+    fn test_recipe_no_step_images() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", "Test content");
+
+        // Only create title image, no step images
+        create_test_image(&temp_dir_path, "test_recipe", "jpg");
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let images = recipe.step_images();
+
+        assert!(images.is_empty());
+        assert_eq!(images.count(), 0);
+    }
+
+    #[test]
+    fn test_recipe_step_images_with_gaps() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", "Test content");
+
+        // Create non-consecutive step images
+        create_test_image(&temp_dir_path, "test_recipe.1", "jpg");
+        create_test_image(&temp_dir_path, "test_recipe.7", "jpg");
+        create_test_image(&temp_dir_path, "test_recipe.15", "jpg");
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let images = recipe.step_images();
+
+        assert_eq!(images.count(), 3);
+        assert!(images.get(0, 1).is_some());
+        assert!(images.get(0, 2).is_none());
+        assert!(images.get(0, 7).is_some());
+        assert!(images.get(0, 15).is_some());
+    }
+
+    #[test]
+    fn test_direct_hashmap_iteration() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", "Test content");
+
+        create_test_image(&temp_dir_path, "test_recipe.1", "jpg");
+        create_test_image(&temp_dir_path, "test_recipe.2", "jpg");
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let images = recipe.step_images();
+
+        // Test direct HashMap access
+        if let Some(section_steps) = images.images.get(&0) {
+            assert_eq!(section_steps.len(), 2);
+            assert!(section_steps.contains_key(&0)); // Recipe.1.jpg
+            assert!(section_steps.contains_key(&1)); // Recipe.2.jpg
+        } else {
+            panic!("Section 0 should exist");
+        }
+    }
+
+    #[test]
+    fn test_parse_image_numbers_valid() {
+        use std::path::PathBuf;
+
+        // Test single number
+        let path = PathBuf::from("Recipe.3.jpg");
+        let result = parse_image_numbers(&path, "Recipe", "jpg");
+        assert_eq!(result, Some(vec![3]));
+
+        // Test two numbers
+        let path = PathBuf::from("Recipe.2.4.jpg");
+        let result = parse_image_numbers(&path, "Recipe", "jpg");
+        assert_eq!(result, Some(vec![2, 4]));
+    }
+
+    #[test]
+    fn test_parse_image_numbers_invalid() {
+        use std::path::PathBuf;
+
+        // Invalid: zero
+        let path = PathBuf::from("Recipe.0.jpg");
+        let result = parse_image_numbers(&path, "Recipe", "jpg");
+        assert_eq!(result, None);
+
+        // Invalid: non-numeric
+        let path = PathBuf::from("Recipe.invalid.jpg");
+        let result = parse_image_numbers(&path, "Recipe", "jpg");
+        assert_eq!(result, None);
+
+        // Invalid: three numbers
+        let path = PathBuf::from("Recipe.1.2.3.jpg");
+        let result = parse_image_numbers(&path, "Recipe", "jpg");
+        assert_eq!(result, None);
     }
 }

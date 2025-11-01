@@ -207,6 +207,16 @@ impl RecipeEntry {
         }
     }
 
+    /// Returns the file name if this recipe is backed by a file.
+    ///
+    /// Returns `None` for recipes created from content.
+    pub fn file_name(&self) -> Option<String> {
+        match &self.source {
+            RecipeSource::Path { path } => Some(path.file_name()?.to_string()),
+            RecipeSource::Content { .. } => None,
+        }
+    }
+
     /// Returns the recipe's tags from metadata.
     ///
     /// Tags can be defined in metadata as:
@@ -298,6 +308,7 @@ mod tests {
         let recipe = RecipeEntry::from_path(recipe_path.clone()).unwrap();
         assert_eq!(recipe.name().as_ref().unwrap(), "test_recipe");
         assert_eq!(recipe.path(), Some(&recipe_path));
+        assert_eq!(recipe.file_name().as_ref().unwrap(), "test_recipe.cook");
         assert!(recipe.title_image().is_none());
     }
 
@@ -611,6 +622,7 @@ mod tests {
         let recipe = RecipeEntry::from_content(content.to_string(), None).unwrap();
         assert!(recipe.name().is_none());
         assert!(recipe.path().is_none());
+        assert!(recipe.file_name().is_none());
     }
 
     #[test]

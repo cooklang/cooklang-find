@@ -5,13 +5,27 @@ edition = "2021"
 description = "Library for finding and managing Cooklang recipes in the filesystem"
 license = "MIT"
 
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+name = "cooklang_find"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi_bindgen.rs"
+
 [dependencies]
 camino = { version = "1.1", features = ["serde1"] }
 glob = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
+serde_json = "1.0"
 thiserror = "2"
+uniffi = { version = "0.28", features = ["cli"] }
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }
 
 [dev-dependencies]
 tempfile = "3"
 indoc = "2"
+uniffi = { version = "0.28", features = ["bindgen-tests"] }

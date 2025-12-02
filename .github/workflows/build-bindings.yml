@@ -1,0 +1,248 @@
+name: Build Platform Bindings
+
+on:
+  push:
+    branches: [main, master]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Build and test the Rust library
+  test:
+    name: Test Rust Library
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run tests
+        run: cargo test --all-features
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
+
+  # Build Swift bindings and XCFramework
+  build-swift:
+    name: Build Swift Package
+    runs-on: macos-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-swift-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build for all Apple platforms
+        run: ./scripts/build-swift.sh --all
+
+      - name: Upload Swift Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-package
+          path: bindings/swift/
+          retention-days: 7
+
+  # Build Kotlin/Android bindings
+  build-kotlin:
+    name: Build Kotlin/Android Package
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26b
+          add-to-path: true
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-kotlin-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build for all Android architectures
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: ./scripts/build-kotlin.sh --all
+
+      - name: Upload Kotlin Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: kotlin-package
+          path: bindings/kotlin/
+          retention-days: 7
+
+  # Generate bindings only (for quick validation)
+  generate-bindings:
+    name: Generate Bindings Only
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-bindings-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Generate Swift bindings
+        run: ./scripts/build-swift.sh --generate-only
+
+      - name: Generate Kotlin bindings
+        run: ./scripts/build-kotlin.sh --generate-only
+
+      - name: Verify bindings generated
+        run: |
+          test -f bindings/swift/Sources/CooklangFind/cooklang_find.swift
+          test -f bindings/kotlin/uniffi/cooklang_find/cooklang_find.kt
+
+  # Publish Swift package on release
+  publish-swift:
+    name: Publish Swift Package
+    runs-on: macos-latest
+    needs: build-swift
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Swift Package
+        uses: actions/download-artifact@v4
+        with:
+          name: swift-package
+          path: bindings/swift/
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create Swift Package release
+        run: |
+          cd bindings/swift
+          zip -r ../../CooklangFind-Swift-${{ steps.version.outputs.VERSION }}.zip .
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: CooklangFind-Swift-${{ steps.version.outputs.VERSION }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publish Kotlin/Android package on release
+  publish-kotlin:
+    name: Publish Kotlin/Android Package
+    runs-on: ubuntu-latest
+    needs: build-kotlin
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Kotlin Package
+        uses: actions/download-artifact@v4
+        with:
+          name: kotlin-package
+          path: bindings/kotlin/
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Create Kotlin Package release
+        run: |
+          cd bindings/kotlin
+          zip -r ../../CooklangFind-Kotlin-${{ steps.version.outputs.VERSION }}.zip .
+
+      - name: Build Android AAR
+        working-directory: bindings/kotlin/android
+        run: |
+          # Create a minimal gradle wrapper if needed
+          if [ ! -f gradlew ]; then
+            gradle wrapper
+          fi
+          ./gradlew assembleRelease -Pversion=${{ steps.version.outputs.VERSION }}
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            CooklangFind-Kotlin-${{ steps.version.outputs.VERSION }}.zip
+            bindings/kotlin/android/build/outputs/aar/*.aar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Optional: Publish to Maven Central (requires additional setup)
+      # - name: Publish to Maven Central
+      #   if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+      #   working-directory: bindings/kotlin/android
+      #   env:
+      #     MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+      #     MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+      #     SIGNING_KEY_ID: ${{ secrets.SIGNING_KEY_ID }}
+      #     SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+      #     SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+      #   run: ./gradlew publishToSonatype closeAndReleaseSonatypeStagingRepository

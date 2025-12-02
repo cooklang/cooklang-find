@@ -76,7 +76,7 @@ impl StepImageCollection {
 /// A recipe can come from either:
 /// - A file path on the filesystem
 /// - Direct content (e.g., from stdin or programmatically created)
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "source_type")]
 pub enum RecipeSource {
     Path {
@@ -129,6 +129,20 @@ pub struct RecipeEntry {
     /// Whether this is a menu file (*.menu) rather than a regular recipe
     #[serde(skip)]
     is_menu: OnceLock<bool>,
+}
+
+impl Clone for RecipeEntry {
+    fn clone(&self) -> Self {
+        RecipeEntry {
+            source: self.source.clone(),
+            metadata: self.metadata.clone(),
+            // Reset cached fields - they will be recomputed on demand
+            name: OnceLock::new(),
+            title_image: OnceLock::new(),
+            step_images: OnceLock::new(),
+            is_menu: OnceLock::new(),
+        }
+    }
 }
 
 impl RecipeEntry {

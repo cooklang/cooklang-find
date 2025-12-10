@@ -1,0 +1,660 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (skip release creation)'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Build iOS artifacts on macOS
+  build-ios:
+    name: Build iOS
+    runs-on: macos-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-ios-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-ios-cargo-
+
+      - name: Build iOS targets
+        run: |
+          cargo build --release --target aarch64-apple-ios
+          cargo build --release --target aarch64-apple-ios-sim
+          cargo build --release --target x86_64-apple-ios
+
+      - name: Generate Swift bindings
+        run: |
+          mkdir -p target/ios/swift
+          cargo run --release --bin uniffi-bindgen -- generate \
+            --library target/aarch64-apple-ios/release/libcooklang_find.a \
+            --language swift \
+            --out-dir target/ios/swift
+
+      - name: Create XCFramework
+        run: |
+          # Clean up any existing xcframework from cache
+          rm -rf target/ios/CooklangFindFFI.xcframework
+          rm -rf target/ios/ios-device target/ios/ios-simulator
+          mkdir -p target/ios/ios-device target/ios/ios-simulator
+
+          # Copy device library
+          cp target/aarch64-apple-ios/release/libcooklang_find.a target/ios/ios-device/
+
+          # Create fat library for simulator
+          lipo -create \
+            target/aarch64-apple-ios-sim/release/libcooklang_find.a \
+            target/x86_64-apple-ios/release/libcooklang_find.a \
+            -output target/ios/ios-simulator/libcooklang_find.a
+
+          # Create headers
+          mkdir -p target/ios/ios-device/Headers target/ios/ios-simulator/Headers
+          cp target/ios/swift/cooklang_findFFI.h target/ios/ios-device/Headers/
+          cp target/ios/swift/cooklang_findFFI.h target/ios/ios-simulator/Headers/
+
+          # Create module maps
+          mkdir -p target/ios/ios-device/Modules target/ios/ios-simulator/Modules
+          echo 'module CooklangFindFFI { header "cooklang_findFFI.h" export * }' > target/ios/ios-device/Modules/module.modulemap
+          echo 'module CooklangFindFFI { header "cooklang_findFFI.h" export * }' > target/ios/ios-simulator/Modules/module.modulemap
+
+          # Create XCFramework
+          xcodebuild -create-xcframework \
+            -library target/ios/ios-device/libcooklang_find.a \
+            -headers target/ios/ios-device/Headers \
+            -library target/ios/ios-simulator/libcooklang_find.a \
+            -headers target/ios/ios-simulator/Headers \
+            -output target/ios/CooklangFindFFI.xcframework
+
+      - name: Create Swift Package
+        run: |
+          mkdir -p target/ios/CooklangFind/Sources/CooklangFind
+          cp target/ios/swift/cooklang_find.swift target/ios/CooklangFind/Sources/CooklangFind/
+          cp -R target/ios/CooklangFindFFI.xcframework target/ios/CooklangFind/
+
+          cat > target/ios/CooklangFind/Package.swift << 'EOF'
+          // swift-tools-version:5.5
+          import PackageDescription
+
+          let package = Package(
+              name: "CooklangFind",
+              platforms: [
+                  .iOS(.v13),
+                  .macOS(.v10_15)
+              ],
+              products: [
+                  .library(
+                      name: "CooklangFind",
+                      targets: ["CooklangFind", "CooklangFindFFI"]
+                  ),
+              ],
+              targets: [
+                  .target(
+                      name: "CooklangFind",
+                      dependencies: ["CooklangFindFFI"]
+                  ),
+                  .binaryTarget(
+                      name: "CooklangFindFFI",
+                      path: "CooklangFindFFI.xcframework"
+                  ),
+              ]
+          )
+          EOF
+
+      - name: Package iOS artifacts
+        run: |
+          cd target/ios
+          # Create xcframework zip (main artifact for SPM)
+          zip -r ../../CooklangFindFFI.xcframework.zip CooklangFindFFI.xcframework
+          # Also create full package with Swift sources for manual integration
+          zip -r ../../CooklangFind-ios.zip CooklangFind CooklangFindFFI.xcframework swift
+
+      - name: Upload iOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-artifacts
+          path: |
+            CooklangFindFFI.xcframework.zip
+            CooklangFind-ios.zip
+
+  # Build Android artifacts on Linux
+  build-android:
+    name: Build Android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-android-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-android-cargo-
+
+      - name: Setup Android NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: |
+          sdkmanager --install "ndk;26.1.10909125"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
+
+      - name: Install cargo-ndk
+        run: command -v cargo-ndk || cargo install cargo-ndk --locked
+
+      - name: Build uniffi-bindgen for host
+        run: cargo build --bin uniffi-bindgen --release
+
+      - name: Build Android targets
+        run: |
+          cargo ndk --target aarch64-linux-android --platform 21 build --release
+          cargo ndk --target armv7-linux-androideabi --platform 21 build --release
+          cargo ndk --target x86_64-linux-android --platform 21 build --release
+
+      - name: Generate Kotlin bindings
+        run: |
+          # Clean up any existing kotlin bindings from cache
+          rm -rf target/android/kotlin
+          mkdir -p target/android/kotlin
+          ./target/release/uniffi-bindgen generate \
+            --library target/aarch64-linux-android/release/libcooklang_find.so \
+            --language kotlin \
+            --out-dir target/android/kotlin
+          # Debug: show what was generated
+          echo "Generated Kotlin files:"
+          find target/android/kotlin -name "*.kt" -type f
+
+      - name: Organize JNI libraries
+        run: |
+          mkdir -p target/android/jniLibs/{arm64-v8a,armeabi-v7a,x86_64}
+          cp target/aarch64-linux-android/release/libcooklang_find.so target/android/jniLibs/arm64-v8a/
+          cp target/armv7-linux-androideabi/release/libcooklang_find.so target/android/jniLibs/armeabi-v7a/
+          cp target/x86_64-linux-android/release/libcooklang_find.so target/android/jniLibs/x86_64/
+
+      - name: Create Android library module
+        run: |
+          mkdir -p target/android/cooklang-find-android/src/main/kotlin
+          mkdir -p target/android/cooklang-find-android/src/main/jniLibs
+
+          # Copy JNI libs
+          cp -R target/android/jniLibs/* target/android/cooklang-find-android/src/main/jniLibs/
+
+          # Copy Kotlin bindings (uniffi generates them in subdirectories)
+          find target/android/kotlin -name "*.kt" -exec cp {} target/android/cooklang-find-android/src/main/kotlin/ \;
+
+          # Create build.gradle.kts
+          cat > target/android/cooklang-find-android/build.gradle.kts << 'EOF'
+          plugins {
+              id("com.android.library")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "org.cooklang.find"
+              compileSdk = 34
+
+              defaultConfig {
+                  minSdk = 21
+                  testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+                  consumerProguardFiles("consumer-rules.pro")
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                      proguardFiles(
+                          getDefaultProguardFile("proguard-android-optimize.txt"),
+                          "proguard-rules.pro"
+                      )
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_1_8
+                  targetCompatibility = JavaVersion.VERSION_1_8
+              }
+              kotlinOptions {
+                  jvmTarget = "1.8"
+              }
+              sourceSets {
+                  getByName("main") {
+                      jniLibs.srcDirs("src/main/jniLibs")
+                  }
+              }
+          }
+
+          dependencies {
+              implementation("net.java.dev.jna:jna:5.14.0@aar")
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+          }
+          EOF
+
+          # Create AndroidManifest.xml
+          mkdir -p target/android/cooklang-find-android/src/main
+          cat > target/android/cooklang-find-android/src/main/AndroidManifest.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+          </manifest>
+          EOF
+
+          # Create proguard rules
+          cat > target/android/cooklang-find-android/proguard-rules.pro << 'EOF'
+          -keep class uniffi.** { *; }
+          -keep class org.cooklang.** { *; }
+          -keep class com.sun.jna.** { *; }
+          -keepclassmembers class * extends com.sun.jna.** { public *; }
+          EOF
+
+          cat > target/android/cooklang-find-android/consumer-rules.pro << 'EOF'
+          -keep class uniffi.** { *; }
+          -keep class org.cooklang.** { *; }
+          EOF
+
+      - name: Package Android artifacts
+        run: |
+          cd target/android
+          zip -r ../../cooklang-find-android.zip cooklang-find-android jniLibs kotlin
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-artifacts
+          path: cooklang-find-android.zip
+
+  # Create GitHub Release
+  release:
+    name: Create Release
+    needs: [build-ios, build-android]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') && github.event.inputs.dry_run != 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Download iOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ios-artifacts
+
+      - name: Download Android artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android-artifacts
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ steps.version.outputs.VERSION }}
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          generate_release_notes: true
+          files: |
+            CooklangFindFFI.xcframework.zip
+            CooklangFind-ios.zip
+            cooklang-find-android.zip
+          body: |
+            ## Mobile SDK Release ${{ steps.version.outputs.VERSION }}
+
+            ### iOS (Swift Package Manager)
+
+            Add to your `Package.swift` or Xcode project:
+            ```swift
+            .package(url: "https://github.com/cooklang/cooklang-find.git", from: "${{ steps.version.outputs.VERSION }}")
+            ```
+
+            **Downloads:**
+            - `CooklangFindFFI.xcframework.zip` - XCFramework binary (used by Package.swift)
+            - `CooklangFind-ios.zip` - Full package with Swift sources for manual integration
+
+            ### Android (GitHub Packages Maven)
+
+            Add to your `settings.gradle.kts`:
+            ```kotlin
+            dependencyResolutionManagement {
+                repositories {
+                    maven {
+                        url = uri("https://maven.pkg.github.com/cooklang/cooklang-find")
+                        credentials {
+                            username = System.getenv("GITHUB_ACTOR")
+                            password = System.getenv("GITHUB_TOKEN")
+                        }
+                    }
+                }
+            }
+            ```
+
+            Add to your `build.gradle.kts`:
+            ```kotlin
+            implementation("org.cooklang:cooklang-find:${{ steps.version.outputs.VERSION }}")
+            ```
+
+            Or download `cooklang-find-android.zip` which contains:
+            - `cooklang-find-android/` - Android library module
+            - `jniLibs/` - Native libraries for all architectures
+            - `kotlin/` - Kotlin bindings source files
+
+            ### Supported Architectures
+
+            **iOS:**
+            - arm64 (devices)
+            - arm64 (simulator, Apple Silicon)
+            - x86_64 (simulator, Intel)
+
+            **Android:**
+            - arm64-v8a
+            - armeabi-v7a
+            - x86_64
+
+            See the README for integration instructions.
+
+  # Update Package.swift for Swift Package Manager
+  update-swift-package:
+    name: Update Package.swift
+    needs: [release]
+    runs-on: macos-latest
+    if: startsWith(github.ref, 'refs/tags/') && github.event.inputs.dry_run != 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Download iOS zip and compute checksum
+        id: checksum
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          URL="https://github.com/cooklang/cooklang-find/releases/download/${VERSION}/CooklangFindFFI.xcframework.zip"
+
+          echo "Downloading from: ${URL}"
+          curl -fsSL "$URL" -o CooklangFindFFI.xcframework.zip
+
+          CHECKSUM=$(swift package compute-checksum CooklangFindFFI.xcframework.zip)
+          echo "Checksum: ${CHECKSUM}"
+          echo "CHECKSUM=${CHECKSUM}" >> $GITHUB_OUTPUT
+
+      - name: Generate Package.swift
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          CHECKSUM="${{ steps.checksum.outputs.CHECKSUM }}"
+
+          cat > Package.swift << EOF
+          // swift-tools-version:5.5
+          // The swift-tools-version declares the minimum version of Swift required to build this package.
+
+          import PackageDescription
+
+          let package = Package(
+              name: "CooklangFind",
+              platforms: [
+                  .iOS(.v13),
+                  .macOS(.v10_15)
+              ],
+              products: [
+                  .library(
+                      name: "CooklangFind",
+                      targets: ["CooklangFind", "CooklangFindFFI"]
+                  ),
+              ],
+              targets: [
+                  .target(
+                      name: "CooklangFind",
+                      dependencies: ["CooklangFindFFI"],
+                      path: "Sources/CooklangFind"
+                  ),
+                  .binaryTarget(
+                      name: "CooklangFindFFI",
+                      url: "https://github.com/cooklang/cooklang-find/releases/download/${VERSION}/CooklangFindFFI.xcframework.zip",
+                      checksum: "${CHECKSUM}"
+                  ),
+              ]
+          )
+          EOF
+
+      - name: Create Sources directory
+        run: |
+          mkdir -p Sources/CooklangFind
+          cat > Sources/CooklangFind/CooklangFind.swift << 'EOF'
+          // Re-export the FFI module for convenience
+          @_exported import CooklangFindFFI
+          EOF
+
+      - name: Commit and push Package.swift
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add Package.swift Sources/
+          git commit -m "Update Package.swift for ${{ steps.version.outputs.VERSION }}" || echo "No changes to commit"
+          git push origin main
+
+  # Publish Android package to GitHub Packages
+  publish-android:
+    name: Publish Android to GitHub Packages
+    needs: [build-android, release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') && github.event.inputs.dry_run != 'true'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Download Android artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android-artifacts
+
+      - name: Extract Android artifacts
+        run: |
+          mkdir -p target/android
+          unzip cooklang-find-android.zip -d target/android/
+
+      - name: Get version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Configure Android library for publishing
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          ANDROID_DIR="target/android/cooklang-find-android"
+
+          # Create settings.gradle.kts with plugin management
+          cat > "${ANDROID_DIR}/settings.gradle.kts" << 'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "cooklang-find-android"
+          EOF
+
+          # Create build.gradle.kts with publishing
+          cat > "${ANDROID_DIR}/build.gradle.kts" << EOF
+          plugins {
+              id("com.android.library") version "8.2.0"
+              id("org.jetbrains.kotlin.android") version "1.9.22"
+              id("maven-publish")
+          }
+
+          group = "org.cooklang"
+          version = "${VERSION}"
+
+          android {
+              namespace = "org.cooklang.find"
+              compileSdk = 34
+
+              defaultConfig {
+                  minSdk = 21
+                  testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+                  consumerProguardFiles("consumer-rules.pro")
+
+                  aarMetadata {
+                      minCompileSdk = 21
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                      proguardFiles(
+                          getDefaultProguardFile("proguard-android-optimize.txt"),
+                          "proguard-rules.pro"
+                      )
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_1_8
+                  targetCompatibility = JavaVersion.VERSION_1_8
+              }
+              kotlinOptions {
+                  jvmTarget = "1.8"
+              }
+              sourceSets {
+                  getByName("main") {
+                      jniLibs.srcDirs("src/main/jniLibs")
+                  }
+              }
+
+              publishing {
+                  singleVariant("release") {
+                      withSourcesJar()
+                  }
+              }
+          }
+
+          dependencies {
+              implementation("net.java.dev.jna:jna:5.14.0@aar")
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+          }
+
+          publishing {
+              publications {
+                  register<MavenPublication>("release") {
+                      groupId = "org.cooklang"
+                      artifactId = "cooklang-find"
+                      version = "${VERSION}"
+
+                      afterEvaluate {
+                          from(components["release"])
+                      }
+
+                      pom {
+                          name.set("CooklangFind")
+                          description.set("Library for finding and managing Cooklang recipes")
+                          url.set("https://github.com/cooklang/cooklang-find")
+
+                          licenses {
+                              license {
+                                  name.set("MIT License")
+                                  url.set("https://opensource.org/licenses/MIT")
+                              }
+                          }
+
+                          scm {
+                              connection.set("scm:git:git://github.com/cooklang/cooklang-find.git")
+                              developerConnection.set("scm:git:ssh://github.com/cooklang/cooklang-find.git")
+                              url.set("https://github.com/cooklang/cooklang-find")
+                          }
+                      }
+                  }
+              }
+
+              repositories {
+                  maven {
+                      name = "GitHubPackages"
+                      url = uri("https://maven.pkg.github.com/cooklang/cooklang-find")
+                      credentials {
+                          username = System.getenv("GITHUB_ACTOR")
+                          password = System.getenv("GITHUB_TOKEN")
+                      }
+                  }
+              }
+          }
+          EOF
+
+          # Create gradle.properties
+          cat > "${ANDROID_DIR}/gradle.properties" << 'GRADLE_EOF'
+          android.useAndroidX=true
+          kotlin.code.style=official
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.nonTransitiveRClass=true
+          GRADLE_EOF
+
+      - name: Publish to GitHub Packages
+        working-directory: target/android/cooklang-find-android
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          gradle wrapper --gradle-version 8.5
+          ./gradlew publish --no-daemon

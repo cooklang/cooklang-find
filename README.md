@@ -16,8 +16,26 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-cooklang-find = "0.1.0"
+cooklang-find = "0.5.1"
 ```
+
+### iOS (Swift Package Manager)
+
+Add to your Xcode project or `Package.swift`:
+
+```swift
+.package(url: "https://github.com/cooklang/cooklang-find", from: "0.5.1")
+```
+
+### Android (GitHub Packages)
+
+Add to your `build.gradle.kts`:
+
+```kotlin
+implementation("org.cooklang:cooklang-find:0.5.1")
+```
+
+See [BINDINGS.md](BINDINGS.md) for detailed mobile integration instructions.
 
 ## Usage
 

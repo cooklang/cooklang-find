@@ -42,7 +42,7 @@ Add to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/cooklang/cooklang-find", from: "0.5.0")
+    .package(url: "https://github.com/cooklang/cooklang-find", from: "0.5.1")
 ]
 ```
 
@@ -123,26 +123,47 @@ do {
 
 ### Installation
 
-#### Gradle
+#### Gradle (GitHub Packages)
+
+Add to your `settings.gradle.kts`:
+
+```kotlin
+dependencyResolutionManagement {
+    repositories {
+        maven {
+            url = uri("https://maven.pkg.github.com/cooklang/cooklang-find")
+            credentials {
+                username = System.getenv("GITHUB_ACTOR") ?: project.findProperty("gpr.user") as String?
+                password = System.getenv("GITHUB_TOKEN") ?: project.findProperty("gpr.token") as String?
+            }
+        }
+    }
+}
+```
 
 Add to your `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("org.cooklang:cooklang-find:0.5.0")
+    implementation("org.cooklang:cooklang-find:0.5.1")
 }
 ```
 
 #### Manual Installation
 
-1. Download the latest AAR from GitHub releases
-2. Add to your `libs` folder
-3. Add to your build.gradle:
+1. Download the latest `cooklang-find-android.zip` from GitHub releases
+2. Extract and copy the `cooklang-find-android` module to your project
+3. Add to your `settings.gradle.kts`:
+
+```kotlin
+include(":cooklang-find-android")
+```
+
+4. Add to your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation(files("libs/cooklang-find-0.5.0.aar"))
-    implementation("net.java.dev.jna:jna:5.13.0@aar")
+    implementation(project(":cooklang-find-android"))
 }
 ```
 
@@ -303,18 +324,21 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 The GitHub Actions workflow automatically:
 
 1. Tests the Rust library on push/PR
-2. Builds Swift bindings and XCFramework on macOS
-3. Builds Kotlin/Android bindings with all architectures
-4. Publishes packages on tagged releases
+2. Builds Swift XCFramework (arm64 device + arm64/x86_64 simulator)
+3. Builds Android AAR with native libraries (arm64-v8a, armeabi-v7a, x86_64)
+4. Creates GitHub Release with all artifacts
+5. Updates `Package.swift` with correct checksum for SPM
+6. Publishes Android AAR to GitHub Packages Maven repository
 
 To create a release:
 
 ```bash
-git tag v0.5.1
-git push origin v0.5.1
+git tag v0.5.2
+git push origin v0.5.2
 ```
 
 This will trigger the workflow to build and publish:
-- `CooklangFind-Swift-0.5.1.zip` - Swift package with XCFramework
-- `CooklangFind-Kotlin-0.5.1.zip` - Kotlin sources with native libraries
-- `cooklang-find-release.aar` - Android AAR library
+- `CooklangFindFFI.xcframework.zip` - XCFramework binary (used by Package.swift)
+- `CooklangFind-ios.zip` - Full iOS package with Swift sources
+- `cooklang-find-android.zip` - Android library module with JNI libs
+- Android AAR published to `maven.pkg.github.com/cooklang/cooklang-find`

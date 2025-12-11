@@ -53,6 +53,7 @@ jobs:
           cargo run --release --bin uniffi-bindgen -- generate \
             --library target/aarch64-apple-ios/release/libcooklang_find.a \
             --language swift \
+            --config uniffi.toml \
             --out-dir target/ios/swift
 
       - name: Create XCFramework
@@ -193,6 +194,7 @@ jobs:
           ./target/release/uniffi-bindgen generate \
             --library target/aarch64-linux-android/release/libcooklang_find.so \
             --language kotlin \
+            --config uniffi.toml \
             --out-dir target/android/kotlin
           # Debug: show what was generated
           echo "Generated Kotlin files:"
@@ -272,14 +274,12 @@ jobs:
 
           # Create proguard rules
           cat > target/android/cooklang-find-android/proguard-rules.pro << 'EOF'
-          -keep class uniffi.** { *; }
           -keep class org.cooklang.** { *; }
           -keep class com.sun.jna.** { *; }
           -keepclassmembers class * extends com.sun.jna.** { public *; }
           EOF
 
           cat > target/android/cooklang-find-android/consumer-rules.pro << 'EOF'
-          -keep class uniffi.** { *; }
           -keep class org.cooklang.** { *; }
           EOF
 

@@ -1,0 +1,9 @@
+[bindings.kotlin]
+package_name = "org.cooklang.find"
+generate_immutable_records = true
+android = true
+
+[bindings.swift]
+ffi_module_name = "CooklangFindFFI"
+module_name = "CooklangFind"
+generate_immutable_records = true

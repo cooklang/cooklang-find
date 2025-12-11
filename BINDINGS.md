@@ -170,7 +170,7 @@ dependencies {
 ### Usage
 
 ```kotlin
-import uniffi.cooklang_find.*
+import org.cooklang.find.*
 
 // Load a recipe by name
 try {
@@ -187,7 +187,7 @@ try {
     stepImages.images.forEach { image ->
         println("Section ${image.section}, Step ${image.step}: ${image.imagePath}")
     }
-} catch (e: CooklangException) {
+} catch (e: CooklangError) {
     println("Error: ${e.message}")
 }
 
@@ -219,16 +219,16 @@ println(recipe.name()) // "Quick Omelette"
 
 ### Error Handling
 
-All functions that can fail throw `CooklangException`:
+All functions that can fail throw `CooklangError`:
 
 ```kotlin
 try {
     val recipe = getRecipe(listOf("./recipes"), "nonexistent")
-} catch (e: CooklangException.NotFound) {
+} catch (e: CooklangError.NotFound) {
     println("Recipe not found: ${e.message}")
-} catch (e: CooklangException.IoError) {
+} catch (e: CooklangError.IoError) {
     println("IO error: ${e.message}")
-} catch (e: CooklangException) {
+} catch (e: CooklangError) {
     println("Other error: ${e.message}")
 }
 ```
@@ -240,7 +240,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 ```proguard
 -keep class com.sun.jna.** { *; }
 -keep class * implements com.sun.jna.** { *; }
--keep class uniffi.cooklang_find.** { *; }
+-keep class org.cooklang.find.** { *; }
 ```
 
 ## API Reference

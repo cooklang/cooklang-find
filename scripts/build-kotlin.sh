@@ -166,6 +166,7 @@ generate_bindings() {
     cargo run --release --bin uniffi-bindgen -- generate \
         --library "$lib_path" \
         --language kotlin \
+        --config "${PROJECT_ROOT}/uniffi.toml" \
         --out-dir "$OUTPUT_DIR"
 
     log_info "Kotlin bindings generated at: $OUTPUT_DIR"
@@ -310,15 +311,15 @@ EOF
 -keep class com.sun.jna.** { *; }
 -keep class * implements com.sun.jna.** { *; }
 
-# Keep UniFFI generated classes
--keep class uniffi.cooklang_find.** { *; }
+# Keep generated classes
+-keep class org.cooklang.find.** { *; }
 EOF
 
     cat > "${android_dir}/consumer-rules.pro" << 'EOF'
 # Keep JNA classes for consumers
 -keep class com.sun.jna.** { *; }
 -keep class * implements com.sun.jna.** { *; }
--keep class uniffi.cooklang_find.** { *; }
+-keep class org.cooklang.find.** { *; }
 EOF
 
     # Create gradle.properties

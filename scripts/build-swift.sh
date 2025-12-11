@@ -108,6 +108,7 @@ generate_bindings() {
     cargo run --release --bin uniffi-bindgen -- generate \
         --library "$lib_path" \
         --language swift \
+        --config "${PROJECT_ROOT}/uniffi.toml" \
         --out-dir "$OUTPUT_DIR/Sources/CooklangFind"
 
     log_info "Swift bindings generated at: $OUTPUT_DIR/Sources/CooklangFind"

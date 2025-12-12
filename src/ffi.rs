@@ -551,6 +551,6 @@ mod tests {
     fn test_library_version() {
         let version = library_version();
         assert!(!version.is_empty());
-        assert_eq!(version, "0.5.0");
+        assert_eq!(version, env!("CARGO_PKG_VERSION"));
     }
 }

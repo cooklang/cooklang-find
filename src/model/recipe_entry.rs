@@ -12,8 +12,8 @@ use thiserror::Error;
 /// Represents the complete collection of step images for a recipe.
 ///
 /// Images are discovered based on the Cooklang naming convention:
-/// - `RecipeName.N.ext`: Stored at [0][N-1] (section 0 = linear/no section)
-/// - `RecipeName.S.N.ext`: Stored at [S-1][N-1] (section S, step N)
+/// - `RecipeName.N.ext`: Stored at \[0\]\[N-1\] (section 0 = linear/no section)
+/// - `RecipeName.S.N.ext`: Stored at \[S-1\]\[N-1\] (section S, step N)
 ///
 /// File numbering is one-indexed (Recipe.1.jpg = first step)
 /// Internal HashMap keys are zero-indexed
@@ -23,8 +23,8 @@ use thiserror::Error;
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct StepImageCollection {
     /// Two-dimensional map: section_index -> step_index -> image_path
-    /// - Section 0: steps for linear recipes (Recipe.N.ext stored at [0][N-1])
-    /// - Section 1+: steps within sections (Recipe.S.N.ext stored at [S-1][N-1])
+    /// - Section 0: steps for linear recipes (Recipe.N.ext stored at \[0\]\[N-1\])
+    /// - Section 1+: steps within sections (Recipe.S.N.ext stored at \[S-1\]\[N-1\])
     ///
     /// HashMap keys are zero-indexed
     pub images: HashMap<usize, HashMap<usize, String>>,

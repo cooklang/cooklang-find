@@ -188,22 +188,22 @@ create_android_lib() {
 
     if [[ -f "${PROJECT_ROOT}/target/aarch64-linux-android/release/libcooklang_find.so" ]]; then
         cp "${PROJECT_ROOT}/target/aarch64-linux-android/release/libcooklang_find.so" "$jni_dir/arm64-v8a/"
-        ((copied++))
+        copied=$((copied + 1))
     fi
 
     if [[ -f "${PROJECT_ROOT}/target/armv7-linux-androideabi/release/libcooklang_find.so" ]]; then
         cp "${PROJECT_ROOT}/target/armv7-linux-androideabi/release/libcooklang_find.so" "$jni_dir/armeabi-v7a/"
-        ((copied++))
+        copied=$((copied + 1))
     fi
 
     if [[ -f "${PROJECT_ROOT}/target/x86_64-linux-android/release/libcooklang_find.so" ]]; then
         cp "${PROJECT_ROOT}/target/x86_64-linux-android/release/libcooklang_find.so" "$jni_dir/x86_64/"
-        ((copied++))
+        copied=$((copied + 1))
     fi
 
     if [[ -f "${PROJECT_ROOT}/target/i686-linux-android/release/libcooklang_find.so" ]]; then
         cp "${PROJECT_ROOT}/target/i686-linux-android/release/libcooklang_find.so" "$jni_dir/x86/"
-        ((copied++))
+        copied=$((copied + 1))
     fi
 
     if [[ $copied -eq 0 ]]; then

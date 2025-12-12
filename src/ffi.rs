@@ -361,7 +361,10 @@ fn collect_recipes(tree: &RecipeTree, recipes: &mut Vec<Arc<FfiRecipeEntry>>) {
 /// # Returns
 /// The recipe if found, or an error.
 #[uniffi::export]
-pub fn get_recipe(base_dirs: Vec<String>, name: String) -> Result<Arc<FfiRecipeEntry>, CooklangError> {
+pub fn get_recipe(
+    base_dirs: Vec<String>,
+    name: String,
+) -> Result<Arc<FfiRecipeEntry>, CooklangError> {
     let entry = get_recipe_str(base_dirs, &name)?;
     Ok(Arc::new(FfiRecipeEntry::new(entry)))
 }
@@ -537,8 +540,16 @@ mod tests {
 
         let mut collection = StepImageCollection::default();
         collection.images.insert(0, HashMap::new());
-        collection.images.get_mut(&0).unwrap().insert(0, "/path/to/image1.jpg".to_string());
-        collection.images.get_mut(&0).unwrap().insert(2, "/path/to/image3.jpg".to_string());
+        collection
+            .images
+            .get_mut(&0)
+            .unwrap()
+            .insert(0, "/path/to/image1.jpg".to_string());
+        collection
+            .images
+            .get_mut(&0)
+            .unwrap()
+            .insert(2, "/path/to/image3.jpg".to_string());
 
         let ffi_images = FfiStepImages::from(&collection);
         assert_eq!(ffi_images.count, 2);

@@ -212,8 +212,8 @@ create_android_lib() {
         log_info "Copied $copied native libraries"
     fi
 
-    # Copy Kotlin sources
-    cp -r "$OUTPUT_DIR/uniffi" "$kotlin_dir/"
+    # Copy Kotlin sources (org/cooklang/find/ structure from uniffi.toml package_name)
+    cp -r "$OUTPUT_DIR/org" "$kotlin_dir/"
 
     # Create build.gradle.kts
     cat > "${android_dir}/build.gradle.kts" << 'EOF'

@@ -140,8 +140,8 @@ create_xcframework() {
 
         # Create module for macOS
         mkdir -p "$OUTPUT_DIR/tmp/macos/Headers"
-        cp "$OUTPUT_DIR/Sources/CooklangFind/cooklang_findFFI.h" "$OUTPUT_DIR/tmp/macos/Headers/"
-        cp "$OUTPUT_DIR/Sources/CooklangFind/cooklang_findFFI.modulemap" "$OUTPUT_DIR/tmp/macos/Headers/module.modulemap"
+        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.h" "$OUTPUT_DIR/tmp/macos/Headers/"
+        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.modulemap" "$OUTPUT_DIR/tmp/macos/Headers/module.modulemap"
 
         framework_args+=(-library "$OUTPUT_DIR/tmp/macos/libcooklang_find.a" -headers "$OUTPUT_DIR/tmp/macos/Headers")
     fi
@@ -151,8 +151,8 @@ create_xcframework() {
         log_info "Adding iOS device library..."
         mkdir -p "$OUTPUT_DIR/tmp/ios-device/Headers"
         cp "${PROJECT_ROOT}/target/aarch64-apple-ios/release/libcooklang_find.a" "$OUTPUT_DIR/tmp/ios-device/"
-        cp "$OUTPUT_DIR/Sources/CooklangFind/cooklang_findFFI.h" "$OUTPUT_DIR/tmp/ios-device/Headers/"
-        cp "$OUTPUT_DIR/Sources/CooklangFind/cooklang_findFFI.modulemap" "$OUTPUT_DIR/tmp/ios-device/Headers/module.modulemap"
+        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.h" "$OUTPUT_DIR/tmp/ios-device/Headers/"
+        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.modulemap" "$OUTPUT_DIR/tmp/ios-device/Headers/module.modulemap"
 
         framework_args+=(-library "$OUTPUT_DIR/tmp/ios-device/libcooklang_find.a" -headers "$OUTPUT_DIR/tmp/ios-device/Headers")
     fi
@@ -174,8 +174,8 @@ create_xcframework() {
             cp "${sim_libs[0]}" "$OUTPUT_DIR/tmp/ios-sim/libcooklang_find.a"
         fi
 
-        cp "$OUTPUT_DIR/Sources/CooklangFind/cooklang_findFFI.h" "$OUTPUT_DIR/tmp/ios-sim/Headers/"
-        cp "$OUTPUT_DIR/Sources/CooklangFind/cooklang_findFFI.modulemap" "$OUTPUT_DIR/tmp/ios-sim/Headers/module.modulemap"
+        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.h" "$OUTPUT_DIR/tmp/ios-sim/Headers/"
+        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.modulemap" "$OUTPUT_DIR/tmp/ios-sim/Headers/module.modulemap"
 
         framework_args+=(-library "$OUTPUT_DIR/tmp/ios-sim/libcooklang_find.a" -headers "$OUTPUT_DIR/tmp/ios-sim/Headers")
     fi
@@ -218,7 +218,7 @@ let package = Package(
             name: "CooklangFind",
             dependencies: ["CooklangFindFFI"],
             path: "Sources/CooklangFind",
-            exclude: ["cooklang_findFFI.h", "cooklang_findFFI.modulemap"]
+            exclude: ["CooklangFindFFI.h", "CooklangFindFFI.modulemap"]
         ),
         .binaryTarget(
             name: "CooklangFindFFI",

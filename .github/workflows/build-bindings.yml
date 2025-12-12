@@ -150,7 +150,7 @@ jobs:
 
       - name: Verify bindings generated
         run: |
-          test -f bindings/swift/Sources/CooklangFind/cooklang_find.swift
+          test -f bindings/swift/Sources/CooklangFind/CooklangFind.swift
           test -f bindings/kotlin/org/cooklang/find/cooklang_find.kt
 
   # Publish Swift package on release

@@ -74,13 +74,13 @@ jobs:
 
           # Create headers
           mkdir -p target/ios/ios-device/Headers target/ios/ios-simulator/Headers
-          cp target/ios/swift/cooklang_findFFI.h target/ios/ios-device/Headers/
-          cp target/ios/swift/cooklang_findFFI.h target/ios/ios-simulator/Headers/
+          cp target/ios/swift/CooklangFindFFI.h target/ios/ios-device/Headers/
+          cp target/ios/swift/CooklangFindFFI.h target/ios/ios-simulator/Headers/
 
           # Create module maps
           mkdir -p target/ios/ios-device/Modules target/ios/ios-simulator/Modules
-          echo 'module CooklangFindFFI { header "cooklang_findFFI.h" export * }' > target/ios/ios-device/Modules/module.modulemap
-          echo 'module CooklangFindFFI { header "cooklang_findFFI.h" export * }' > target/ios/ios-simulator/Modules/module.modulemap
+          echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > target/ios/ios-device/Modules/module.modulemap
+          echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > target/ios/ios-simulator/Modules/module.modulemap
 
           # Create XCFramework
           xcodebuild -create-xcframework \
@@ -93,7 +93,7 @@ jobs:
       - name: Create Swift Package
         run: |
           mkdir -p target/ios/CooklangFind/Sources/CooklangFind
-          cp target/ios/swift/cooklang_find.swift target/ios/CooklangFind/Sources/CooklangFind/
+          cp target/ios/swift/CooklangFind.swift target/ios/CooklangFind/Sources/CooklangFind/
           cp -R target/ios/CooklangFindFFI.xcframework target/ios/CooklangFind/
 
           cat > target/ios/CooklangFind/Package.swift << 'EOF'

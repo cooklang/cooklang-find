@@ -37,6 +37,8 @@ uniffi = { version = "0.28", features = ["bindgen-tests"] }
 
 [profile.release]
 lto = false
-strip = true
+# Note: strip = true removes uniffi metadata sections needed for bindgen
+# Use "debuginfo" to strip debug info but preserve uniffi metadata
+strip = "debuginfo"
 opt-level = "s"
 panic = "abort"

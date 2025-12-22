@@ -4,8 +4,13 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# Use realpath to get canonical path with correct case on macOS
+PROJECT_ROOT="$(realpath "$(dirname "$SCRIPT_DIR")")"
+
+# Ensure we're working from the canonical path
+cd "$PROJECT_ROOT"
+
 OUTPUT_DIR="${PROJECT_ROOT}/bindings/swift"
 XCFRAMEWORK_DIR="${OUTPUT_DIR}/CooklangFind.xcframework"
 
@@ -51,13 +56,9 @@ check_requirements() {
 
 # Install required Rust targets
 install_targets() {
-    log_info "Installing Rust targets for Apple platforms..."
+    log_info "Installing Rust targets for iOS..."
 
-    # macOS
-    rustup target add x86_64-apple-darwin 2>/dev/null || true
-    rustup target add aarch64-apple-darwin 2>/dev/null || true
-
-    # iOS
+    # iOS only
     rustup target add aarch64-apple-ios 2>/dev/null || true
     rustup target add aarch64-apple-ios-sim 2>/dev/null || true
     rustup target add x86_64-apple-ios 2>/dev/null || true
@@ -82,7 +83,7 @@ generate_bindings() {
 
     # Find a built library to generate bindings from
     local lib_path=""
-    for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios; do
+    for target in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
         local candidate="${PROJECT_ROOT}/target/${target}/release/libcooklang_find.dylib"
         if [[ -f "$candidate" ]]; then
             lib_path="$candidate"
@@ -105,7 +106,7 @@ generate_bindings() {
         fi
     fi
 
-    cargo run --release --bin uniffi-bindgen -- generate \
+    cargo run --release --features cli --bin uniffi-bindgen -- generate \
         --library "$lib_path" \
         --language swift \
         --config "${PROJECT_ROOT}/uniffi.toml" \
@@ -114,7 +115,7 @@ generate_bindings() {
     log_info "Swift bindings generated at: $OUTPUT_DIR/Sources/CooklangFind"
 }
 
-# Create XCFramework (macOS only)
+# Create XCFramework (iOS only)
 create_xcframework() {
     if [[ "$OSTYPE" != "darwin"* ]]; then
         log_warn "XCFramework creation is only supported on macOS"
@@ -127,24 +128,6 @@ create_xcframework() {
     mkdir -p "$OUTPUT_DIR/tmp"
 
     local framework_args=()
-
-    # macOS universal binary
-    if [[ -f "${PROJECT_ROOT}/target/aarch64-apple-darwin/release/libcooklang_find.a" ]] && \
-       [[ -f "${PROJECT_ROOT}/target/x86_64-apple-darwin/release/libcooklang_find.a" ]]; then
-        log_info "Creating macOS universal binary..."
-        mkdir -p "$OUTPUT_DIR/tmp/macos"
-        lipo -create \
-            "${PROJECT_ROOT}/target/aarch64-apple-darwin/release/libcooklang_find.a" \
-            "${PROJECT_ROOT}/target/x86_64-apple-darwin/release/libcooklang_find.a" \
-            -output "$OUTPUT_DIR/tmp/macos/libcooklang_find.a"
-
-        # Create module for macOS
-        mkdir -p "$OUTPUT_DIR/tmp/macos/Headers"
-        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.h" "$OUTPUT_DIR/tmp/macos/Headers/"
-        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.modulemap" "$OUTPUT_DIR/tmp/macos/Headers/module.modulemap"
-
-        framework_args+=(-library "$OUTPUT_DIR/tmp/macos/libcooklang_find.a" -headers "$OUTPUT_DIR/tmp/macos/Headers")
-    fi
 
     # iOS device
     if [[ -f "${PROJECT_ROOT}/target/aarch64-apple-ios/release/libcooklang_find.a" ]]; then
@@ -202,10 +185,7 @@ import PackageDescription
 let package = Package(
     name: "CooklangFind",
     platforms: [
-        .iOS(.v13),
-        .macOS(.v10_15),
-        .tvOS(.v13),
-        .watchOS(.v6)
+        .iOS(.v13)
     ],
     products: [
         .library(
@@ -250,7 +230,7 @@ main() {
                 echo "Usage: $0 [OPTIONS]"
                 echo ""
                 echo "Options:"
-                echo "  --all            Build for all Apple platforms"
+                echo "  --all            Build for all iOS platforms"
                 echo "  --generate-only  Only generate Swift bindings (no compilation)"
                 echo "  --help, -h       Show this help message"
                 exit 0
@@ -273,13 +253,11 @@ main() {
         install_targets
 
         if [[ "$OSTYPE" == "darwin"* ]]; then
-            build_target "aarch64-apple-darwin"
-            build_target "x86_64-apple-darwin"
             build_target "aarch64-apple-ios"
             build_target "aarch64-apple-ios-sim"
             build_target "x86_64-apple-ios"
         else
-            log_warn "Cross-compiling for Apple platforms requires macOS"
+            log_warn "Cross-compiling for iOS requires macOS"
             log_info "Building for host platform only..."
             cargo build --release
         fi

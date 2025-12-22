@@ -163,7 +163,7 @@ generate_bindings() {
         fi
     fi
 
-    cargo run --release --bin uniffi-bindgen -- generate \
+    cargo run --release --features cli --bin uniffi-bindgen -- generate \
         --library "$lib_path" \
         --language kotlin \
         --config "${PROJECT_ROOT}/uniffi.toml" \

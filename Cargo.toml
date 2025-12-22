@@ -12,6 +12,11 @@ name = "cooklang_find"
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/bin/uniffi_bindgen.rs"
+required-features = ["cli"]
+
+[features]
+default = []
+cli = ["uniffi/cli"]
 
 [dependencies]
 camino = { version = "1.1", features = ["serde1"] }
@@ -20,7 +25,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1.0"
 thiserror = "2"
-uniffi = { version = "0.28", features = ["cli"] }
+uniffi = "0.28"
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }
@@ -29,3 +34,9 @@ uniffi = { version = "0.28", features = ["build"] }
 tempfile = "3"
 indoc = "2"
 uniffi = { version = "0.28", features = ["bindgen-tests"] }
+
+[profile.release]
+lto = false
+strip = true
+opt-level = "s"
+panic = "abort"

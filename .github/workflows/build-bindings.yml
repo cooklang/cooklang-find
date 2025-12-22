@@ -108,6 +108,9 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-kotlin-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Install cargo-ndk
+        run: command -v cargo-ndk || cargo install cargo-ndk --locked
+
       - name: Build for all Android architectures
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}

@@ -34,6 +34,20 @@ ANDROID_TARGETS=(
     "i686-linux-android"
 )
 
+# Get ABI name for a target
+get_abi_for_target() {
+    local target=$1
+    case "$target" in
+        aarch64-linux-android) echo "arm64-v8a" ;;
+        armv7-linux-androideabi) echo "armeabi-v7a" ;;
+        x86_64-linux-android) echo "x86_64" ;;
+        i686-linux-android) echo "x86" ;;
+        *) echo "" ;;
+    esac
+}
+
+MIN_API=21
+
 # Check for required tools
 check_requirements() {
     log_info "Checking requirements..."
@@ -46,6 +60,16 @@ check_requirements() {
     if ! command -v rustup &> /dev/null; then
         log_error "rustup is not installed. Please install rustup."
         exit 1
+    fi
+}
+
+# Check and install cargo-ndk if needed
+check_cargo_ndk() {
+    if ! command -v cargo-ndk &> /dev/null; then
+        log_info "Installing cargo-ndk..."
+        cargo install cargo-ndk --locked
+    else
+        log_info "cargo-ndk is already installed"
     fi
 }
 
@@ -76,65 +100,23 @@ install_targets() {
     done
 }
 
-# Setup cargo config for Android NDK
-setup_cargo_config() {
-    local ndk_home="${ANDROID_NDK_HOME:-$NDK_HOME}"
-    local config_dir="${PROJECT_ROOT}/.cargo"
-    local config_file="${config_dir}/config.toml"
-
-    mkdir -p "$config_dir"
-
-    # Detect host OS
-    local host_os
-    case "$OSTYPE" in
-        linux*)   host_os="linux" ;;
-        darwin*)  host_os="darwin" ;;
-        *)        host_os="linux" ;;
-    esac
-
-    # Find the NDK toolchain
-    local toolchain_dir="${ndk_home}/toolchains/llvm/prebuilt/${host_os}-x86_64"
-    if [[ ! -d "$toolchain_dir" ]]; then
-        log_error "NDK toolchain not found at: $toolchain_dir"
-        return 1
-    fi
-
-    local min_api=21
-
-    cat > "$config_file" << EOF
-# Auto-generated cargo config for Android NDK
-# NDK Path: $ndk_home
-
-[target.aarch64-linux-android]
-ar = "${toolchain_dir}/bin/llvm-ar"
-linker = "${toolchain_dir}/bin/aarch64-linux-android${min_api}-clang"
-
-[target.armv7-linux-androideabi]
-ar = "${toolchain_dir}/bin/llvm-ar"
-linker = "${toolchain_dir}/bin/armv7a-linux-androideabi${min_api}-clang"
-
-[target.x86_64-linux-android]
-ar = "${toolchain_dir}/bin/llvm-ar"
-linker = "${toolchain_dir}/bin/x86_64-linux-android${min_api}-clang"
-
-[target.i686-linux-android]
-ar = "${toolchain_dir}/bin/llvm-ar"
-linker = "${toolchain_dir}/bin/i686-linux-android${min_api}-clang"
-EOF
-
-    log_info "Cargo config written to: $config_file"
+# Build uniffi-bindgen for the host platform first
+build_uniffi_bindgen() {
+    log_info "Building uniffi-bindgen for host platform..."
+    cd "$PROJECT_ROOT"
+    cargo build --features cli --bin uniffi-bindgen --release
 }
 
-# Build for a specific target
-build_target() {
+# Build for a specific Android target using cargo-ndk
+build_android_target() {
     local target=$1
     log_info "Building for target: $target"
 
     cd "$PROJECT_ROOT"
-    cargo build --release --target "$target"
+    cargo ndk --target "$target" --platform "$MIN_API" build --release
 }
 
-# Generate Kotlin bindings
+# Generate Kotlin bindings using pre-built uniffi-bindgen
 generate_bindings() {
     log_info "Generating Kotlin bindings..."
 
@@ -150,26 +132,51 @@ generate_bindings() {
         local candidate="${PROJECT_ROOT}/target/${target}/release/libcooklang_find.so"
         if [[ -f "$candidate" ]]; then
             lib_path="$candidate"
+            log_info "Using library: $lib_path"
             break
         fi
     done
 
     # Fall back to host target
     if [[ -z "$lib_path" ]]; then
+        log_info "No Android library found, building for host..."
         cargo build --release
         lib_path="${PROJECT_ROOT}/target/release/libcooklang_find.so"
         if [[ ! -f "$lib_path" ]]; then
             lib_path="${PROJECT_ROOT}/target/release/libcooklang_find.dylib"
         fi
+        if [[ ! -f "$lib_path" ]]; then
+            log_error "Could not find built library"
+            exit 1
+        fi
     fi
 
-    cargo run --release --features cli --bin uniffi-bindgen -- generate \
+    # Use the pre-built uniffi-bindgen binary
+    local bindgen="${PROJECT_ROOT}/target/release/uniffi-bindgen"
+    if [[ ! -f "$bindgen" ]]; then
+        log_info "uniffi-bindgen not found, building it..."
+        build_uniffi_bindgen
+    fi
+
+    log_info "Running uniffi-bindgen..."
+    "$bindgen" generate \
         --library "$lib_path" \
         --language kotlin \
         --config "${PROJECT_ROOT}/uniffi.toml" \
         --out-dir "$OUTPUT_DIR"
 
+    # Verify and show what was generated
     log_info "Kotlin bindings generated at: $OUTPUT_DIR"
+    log_info "Generated files:"
+    find "$OUTPUT_DIR" -name "*.kt" -type f
+
+    # Verify the expected structure exists
+    if [[ ! -d "$OUTPUT_DIR/org" ]]; then
+        log_error "Expected directory structure not created: $OUTPUT_DIR/org"
+        log_error "Contents of $OUTPUT_DIR:"
+        ls -la "$OUTPUT_DIR"
+        exit 1
+    fi
 }
 
 # Create Android library structure
@@ -186,25 +193,15 @@ create_android_lib() {
     # Copy native libraries
     local copied=0
 
-    if [[ -f "${PROJECT_ROOT}/target/aarch64-linux-android/release/libcooklang_find.so" ]]; then
-        cp "${PROJECT_ROOT}/target/aarch64-linux-android/release/libcooklang_find.so" "$jni_dir/arm64-v8a/"
-        copied=$((copied + 1))
-    fi
-
-    if [[ -f "${PROJECT_ROOT}/target/armv7-linux-androideabi/release/libcooklang_find.so" ]]; then
-        cp "${PROJECT_ROOT}/target/armv7-linux-androideabi/release/libcooklang_find.so" "$jni_dir/armeabi-v7a/"
-        copied=$((copied + 1))
-    fi
-
-    if [[ -f "${PROJECT_ROOT}/target/x86_64-linux-android/release/libcooklang_find.so" ]]; then
-        cp "${PROJECT_ROOT}/target/x86_64-linux-android/release/libcooklang_find.so" "$jni_dir/x86_64/"
-        copied=$((copied + 1))
-    fi
-
-    if [[ -f "${PROJECT_ROOT}/target/i686-linux-android/release/libcooklang_find.so" ]]; then
-        cp "${PROJECT_ROOT}/target/i686-linux-android/release/libcooklang_find.so" "$jni_dir/x86/"
-        copied=$((copied + 1))
-    fi
+    for target in "${ANDROID_TARGETS[@]}"; do
+        local abi
+        abi=$(get_abi_for_target "$target")
+        local so_file="${PROJECT_ROOT}/target/${target}/release/libcooklang_find.so"
+        if [[ -f "$so_file" ]]; then
+            cp "$so_file" "$jni_dir/$abi/"
+            copied=$((copied + 1))
+        fi
+    done
 
     if [[ $copied -eq 0 ]]; then
         log_warn "No Android native libraries found to copy"
@@ -371,7 +368,7 @@ main() {
                 echo "Usage: $0 [OPTIONS]"
                 echo ""
                 echo "Options:"
-                echo "  --all            Build for all Android architectures"
+                echo "  --all            Build for all Android architectures (requires cargo-ndk)"
                 echo "  --generate-only  Only generate Kotlin bindings (no compilation)"
                 echo "  --help, -h       Show this help message"
                 echo ""
@@ -389,6 +386,9 @@ main() {
 
     check_requirements
 
+    # Always build uniffi-bindgen first (before any cross-compilation)
+    build_uniffi_bindgen
+
     if [[ "$generate_only" == true ]]; then
         generate_bindings
         exit 0
@@ -396,11 +396,11 @@ main() {
 
     if [[ "$build_all" == true ]]; then
         if check_android_ndk; then
+            check_cargo_ndk
             install_targets
-            setup_cargo_config
 
             for target in "${ANDROID_TARGETS[@]}"; do
-                build_target "$target"
+                build_android_target "$target"
             done
         else
             log_info "Building for host platform only..."

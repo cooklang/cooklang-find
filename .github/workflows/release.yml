@@ -50,7 +50,7 @@ jobs:
       - name: Generate Swift bindings
         run: |
           mkdir -p target/ios/swift
-          cargo run --release --bin uniffi-bindgen -- generate \
+          cargo run --release --features cli --bin uniffi-bindgen -- generate \
             --library target/aarch64-apple-ios/release/libcooklang_find.a \
             --language swift \
             --config uniffi.toml \
@@ -103,8 +103,7 @@ jobs:
           let package = Package(
               name: "CooklangFind",
               platforms: [
-                  .iOS(.v13),
-                  .macOS(.v10_15)
+                  .iOS(.v13)
               ],
               products: [
                   .library(
@@ -178,7 +177,7 @@ jobs:
         run: command -v cargo-ndk || cargo install cargo-ndk --locked
 
       - name: Build uniffi-bindgen for host
-        run: cargo build --bin uniffi-bindgen --release
+        run: cargo build --features cli --bin uniffi-bindgen --release
 
       - name: Build Android targets
         run: |
@@ -432,8 +431,7 @@ jobs:
           let package = Package(
               name: "CooklangFind",
               platforms: [
-                  .iOS(.v13),
-                  .macOS(.v10_15)
+                  .iOS(.v13)
               ],
               products: [
                   .library(

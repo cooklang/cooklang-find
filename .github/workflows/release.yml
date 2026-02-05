@@ -109,13 +109,12 @@ jobs:
             target/x86_64-apple-ios/release/libcooklang_find.a \
             -output target/ios/ios-simulator/libcooklang_find.a
 
+          # Create headers and module maps (must be in Headers/ directory)
           mkdir -p target/ios/ios-device/Headers target/ios/ios-simulator/Headers
           cp target/ios/swift/CooklangFindFFI.h target/ios/ios-device/Headers/
           cp target/ios/swift/CooklangFindFFI.h target/ios/ios-simulator/Headers/
-
-          mkdir -p target/ios/ios-device/Modules target/ios/ios-simulator/Modules
-          echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > target/ios/ios-device/Modules/module.modulemap
-          echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > target/ios/ios-simulator/Modules/module.modulemap
+          echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > target/ios/ios-device/Headers/module.modulemap
+          echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > target/ios/ios-simulator/Headers/module.modulemap
 
           xcodebuild -create-xcframework \
             -library target/ios/ios-device/libcooklang_find.a \

@@ -135,7 +135,7 @@ create_xcframework() {
         mkdir -p "$OUTPUT_DIR/tmp/ios-device/Headers"
         cp "${PROJECT_ROOT}/target/aarch64-apple-ios/release/libcooklang_find.a" "$OUTPUT_DIR/tmp/ios-device/"
         cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.h" "$OUTPUT_DIR/tmp/ios-device/Headers/"
-        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.modulemap" "$OUTPUT_DIR/tmp/ios-device/Headers/module.modulemap"
+        echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > "$OUTPUT_DIR/tmp/ios-device/Headers/module.modulemap"
 
         framework_args+=(-library "$OUTPUT_DIR/tmp/ios-device/libcooklang_find.a" -headers "$OUTPUT_DIR/tmp/ios-device/Headers")
     fi
@@ -158,7 +158,7 @@ create_xcframework() {
         fi
 
         cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.h" "$OUTPUT_DIR/tmp/ios-sim/Headers/"
-        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.modulemap" "$OUTPUT_DIR/tmp/ios-sim/Headers/module.modulemap"
+        echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > "$OUTPUT_DIR/tmp/ios-sim/Headers/module.modulemap"
 
         framework_args+=(-library "$OUTPUT_DIR/tmp/ios-sim/libcooklang_find.a" -headers "$OUTPUT_DIR/tmp/ios-sim/Headers")
     fi

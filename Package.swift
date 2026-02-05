@@ -6,7 +6,8 @@ import PackageDescription
 let package = Package(
     name: "CooklangFind",
     platforms: [
-        .iOS(.v13)
+        .iOS(.v13),
+        .macOS(.v10_15)
     ],
     products: [
         .library(
@@ -22,8 +23,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "CooklangFindFFI",
-            url: "https://github.com/cooklang/cooklang-find/releases/download/v0.5.2/CooklangFindFFI.xcframework.zip",
-            checksum: "9c30f7e2f79db488d572e588dacacba56bac6e412988474682e6cd2418ea9e07"
+            url: "https://github.com/cooklang/cooklang-find/releases/download/v0.5.3/CooklangFindFFI.xcframework.zip",
+            checksum: "c8bf304eca4afdd48aef35ce899bb6445627fb79711dff3effdb55b049982394"
         ),
     ]
 )

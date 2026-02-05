@@ -23,8 +23,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "CooklangFindFFI",
-            url: "https://github.com/cooklang/cooklang-find/releases/download/v0.5.3/CooklangFindFFI.xcframework.zip",
-            checksum: "c8bf304eca4afdd48aef35ce899bb6445627fb79711dff3effdb55b049982394"
+            url: "https://github.com/cooklang/cooklang-find/releases/download/v0.5.4/CooklangFindFFI.xcframework.zip",
+            checksum: "cbdb317e66d2b8e6e15384a071c90e2445d10784e182e2ff630402fc6bbd474d"
         ),
     ]
 )

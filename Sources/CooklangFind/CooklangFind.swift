@@ -1415,12 +1415,30 @@ public func FfiConverterTypeStepImageEntry_lower(_ value: StepImageEntry) -> Rus
  * FFI-safe error type that wraps all possible errors.
  */
 public enum CooklangError {
-    case NotFound(message: String)
-    case IoError(message: String)
-    case ParseError(message: String)
-    case InvalidPath(message: String)
-    case SearchError(message: String)
-    case TreeError(message: String)
+    /**
+     * Recipe not found
+     */
+    case NotFound(reason: String)
+    /**
+     * IO error (file not found, permission denied, etc.)
+     */
+    case IoError(reason: String)
+    /**
+     * Failed to parse recipe or metadata
+     */
+    case ParseError(reason: String)
+    /**
+     * Invalid path provided
+     */
+    case InvalidPath(reason: String)
+    /**
+     * Search operation failed
+     */
+    case SearchError(reason: String)
+    /**
+     * Tree operation failed
+     */
+    case TreeError(reason: String)
 }
 
 #if swift(>=5.8)
@@ -1433,22 +1451,22 @@ public struct FfiConverterTypeCooklangError: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
         case 1: return try .NotFound(
-                message: FfiConverterString.read(from: &buf)
+                reason: FfiConverterString.read(from: &buf)
             )
         case 2: return try .IoError(
-                message: FfiConverterString.read(from: &buf)
+                reason: FfiConverterString.read(from: &buf)
             )
         case 3: return try .ParseError(
-                message: FfiConverterString.read(from: &buf)
+                reason: FfiConverterString.read(from: &buf)
             )
         case 4: return try .InvalidPath(
-                message: FfiConverterString.read(from: &buf)
+                reason: FfiConverterString.read(from: &buf)
             )
         case 5: return try .SearchError(
-                message: FfiConverterString.read(from: &buf)
+                reason: FfiConverterString.read(from: &buf)
             )
         case 6: return try .TreeError(
-                message: FfiConverterString.read(from: &buf)
+                reason: FfiConverterString.read(from: &buf)
             )
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -1456,29 +1474,29 @@ public struct FfiConverterTypeCooklangError: FfiConverterRustBuffer {
 
     public static func write(_ value: CooklangError, into buf: inout [UInt8]) {
         switch value {
-        case let .NotFound(message):
+        case let .NotFound(reason):
             writeInt(&buf, Int32(1))
-            FfiConverterString.write(message, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
 
-        case let .IoError(message):
+        case let .IoError(reason):
             writeInt(&buf, Int32(2))
-            FfiConverterString.write(message, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
 
-        case let .ParseError(message):
+        case let .ParseError(reason):
             writeInt(&buf, Int32(3))
-            FfiConverterString.write(message, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
 
-        case let .InvalidPath(message):
+        case let .InvalidPath(reason):
             writeInt(&buf, Int32(4))
-            FfiConverterString.write(message, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
 
-        case let .SearchError(message):
+        case let .SearchError(reason):
             writeInt(&buf, Int32(5))
-            FfiConverterString.write(message, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
 
-        case let .TreeError(message):
+        case let .TreeError(reason):
             writeInt(&buf, Int32(6))
-            FfiConverterString.write(message, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
         }
     }
 }

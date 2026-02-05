@@ -11,36 +11,46 @@ use camino::Utf8Path;
 use std::sync::Arc;
 
 /// FFI-safe error type that wraps all possible errors.
-#[derive(Debug, uniffi::Error, thiserror::Error)]
+#[derive(Debug, Clone, uniffi::Error)]
 pub enum CooklangError {
-    #[error("Recipe not found: {message}")]
-    NotFound { message: String },
-
-    #[error("IO error: {message}")]
-    IoError { message: String },
-
-    #[error("Parse error: {message}")]
-    ParseError { message: String },
-
-    #[error("Invalid path: {message}")]
-    InvalidPath { message: String },
-
-    #[error("Search error: {message}")]
-    SearchError { message: String },
-
-    #[error("Tree error: {message}")]
-    TreeError { message: String },
+    /// Recipe not found
+    NotFound { reason: String },
+    /// IO error (file not found, permission denied, etc.)
+    IoError { reason: String },
+    /// Failed to parse recipe or metadata
+    ParseError { reason: String },
+    /// Invalid path provided
+    InvalidPath { reason: String },
+    /// Search operation failed
+    SearchError { reason: String },
+    /// Tree operation failed
+    TreeError { reason: String },
 }
+
+impl std::fmt::Display for CooklangError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CooklangError::NotFound { reason } => write!(f, "Not found: {}", reason),
+            CooklangError::IoError { reason } => write!(f, "IO error: {}", reason),
+            CooklangError::ParseError { reason } => write!(f, "Parse error: {}", reason),
+            CooklangError::InvalidPath { reason } => write!(f, "Invalid path: {}", reason),
+            CooklangError::SearchError { reason } => write!(f, "Search error: {}", reason),
+            CooklangError::TreeError { reason } => write!(f, "Tree error: {}", reason),
+        }
+    }
+}
+
+impl std::error::Error for CooklangError {}
 
 impl From<FetchError> for CooklangError {
     fn from(e: FetchError) -> Self {
         match e {
             FetchError::IoError(e) => CooklangError::IoError {
-                message: e.to_string(),
+                reason: e.to_string(),
             },
             FetchError::RecipeEntryError(e) => e.into(),
             FetchError::InvalidPath(p) => CooklangError::NotFound {
-                message: format!("Recipe not found: {}", p),
+                reason: format!("Recipe not found: {}", p),
             },
         }
     }
@@ -50,13 +60,13 @@ impl From<RecipeEntryError> for CooklangError {
     fn from(e: RecipeEntryError) -> Self {
         match e {
             RecipeEntryError::IoError(e) => CooklangError::IoError {
-                message: e.to_string(),
+                reason: e.to_string(),
             },
             RecipeEntryError::InvalidPath(p) => CooklangError::InvalidPath {
-                message: p.to_string(),
+                reason: p.to_string(),
             },
-            RecipeEntryError::ParseError(msg) => CooklangError::ParseError { message: msg },
-            RecipeEntryError::MetadataError(msg) => CooklangError::ParseError { message: msg },
+            RecipeEntryError::ParseError(msg) => CooklangError::ParseError { reason: msg },
+            RecipeEntryError::MetadataError(msg) => CooklangError::ParseError { reason: msg },
         }
     }
 }
@@ -64,7 +74,7 @@ impl From<RecipeEntryError> for CooklangError {
 impl From<SearchError> for CooklangError {
     fn from(e: SearchError) -> Self {
         CooklangError::SearchError {
-            message: e.to_string(),
+            reason: e.to_string(),
         }
     }
 }
@@ -72,7 +82,7 @@ impl From<SearchError> for CooklangError {
 impl From<TreeError> for CooklangError {
     fn from(e: TreeError) -> Self {
         CooklangError::TreeError {
-            message: e.to_string(),
+            reason: e.to_string(),
         }
     }
 }

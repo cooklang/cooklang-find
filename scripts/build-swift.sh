@@ -132,10 +132,10 @@ create_xcframework() {
     # iOS device
     if [[ -f "${PROJECT_ROOT}/target/aarch64-apple-ios/release/libcooklang_find.a" ]]; then
         log_info "Adding iOS device library..."
-        mkdir -p "$OUTPUT_DIR/tmp/ios-device/Headers"
+        mkdir -p "$OUTPUT_DIR/tmp/ios-device/Headers/CooklangFindFFI"
         cp "${PROJECT_ROOT}/target/aarch64-apple-ios/release/libcooklang_find.a" "$OUTPUT_DIR/tmp/ios-device/"
-        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.h" "$OUTPUT_DIR/tmp/ios-device/Headers/"
-        echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > "$OUTPUT_DIR/tmp/ios-device/Headers/module.modulemap"
+        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.h" "$OUTPUT_DIR/tmp/ios-device/Headers/CooklangFindFFI/"
+        echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > "$OUTPUT_DIR/tmp/ios-device/Headers/CooklangFindFFI/module.modulemap"
 
         framework_args+=(-library "$OUTPUT_DIR/tmp/ios-device/libcooklang_find.a" -headers "$OUTPUT_DIR/tmp/ios-device/Headers")
     fi
@@ -149,7 +149,7 @@ create_xcframework() {
 
     if [[ ${#sim_libs[@]} -gt 0 ]]; then
         log_info "Creating iOS simulator library..."
-        mkdir -p "$OUTPUT_DIR/tmp/ios-sim/Headers"
+        mkdir -p "$OUTPUT_DIR/tmp/ios-sim/Headers/CooklangFindFFI"
 
         if [[ ${#sim_libs[@]} -gt 1 ]]; then
             lipo -create "${sim_libs[@]}" -output "$OUTPUT_DIR/tmp/ios-sim/libcooklang_find.a"
@@ -157,8 +157,8 @@ create_xcframework() {
             cp "${sim_libs[0]}" "$OUTPUT_DIR/tmp/ios-sim/libcooklang_find.a"
         fi
 
-        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.h" "$OUTPUT_DIR/tmp/ios-sim/Headers/"
-        echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > "$OUTPUT_DIR/tmp/ios-sim/Headers/module.modulemap"
+        cp "$OUTPUT_DIR/Sources/CooklangFind/CooklangFindFFI.h" "$OUTPUT_DIR/tmp/ios-sim/Headers/CooklangFindFFI/"
+        echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > "$OUTPUT_DIR/tmp/ios-sim/Headers/CooklangFindFFI/module.modulemap"
 
         framework_args+=(-library "$OUTPUT_DIR/tmp/ios-sim/libcooklang_find.a" -headers "$OUTPUT_DIR/tmp/ios-sim/Headers")
     fi

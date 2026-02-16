@@ -568,9 +568,8 @@ fn collect_related_files(
 ) {
     // Canonicalize and mark as visited to prevent cycles
     let canonical = match std::fs::canonicalize(recipe_path) {
-        Ok(p) => Utf8PathBuf::from_path_buf(p).unwrap_or_else(|p| {
-            Utf8PathBuf::from(p.to_string_lossy().into_owned())
-        }),
+        Ok(p) => Utf8PathBuf::from_path_buf(p)
+            .unwrap_or_else(|p| Utf8PathBuf::from(p.to_string_lossy().into_owned())),
         Err(_) => recipe_path.to_path_buf(),
     };
     if !visited.insert(canonical) {
@@ -610,9 +609,8 @@ fn collect_related_files(
 
         for candidate in candidates {
             let canonical_candidate = match std::fs::canonicalize(&candidate) {
-                Ok(p) => Utf8PathBuf::from_path_buf(p).unwrap_or_else(|p| {
-                    Utf8PathBuf::from(p.to_string_lossy().into_owned())
-                }),
+                Ok(p) => Utf8PathBuf::from_path_buf(p)
+                    .unwrap_or_else(|p| Utf8PathBuf::from(p.to_string_lossy().into_owned())),
                 Err(_) => candidate.clone(),
             };
             if candidate.exists() && !visited.contains(&canonical_candidate) {
@@ -1360,8 +1358,12 @@ mod tests {
 
         // Should include: sauces/Hollandaise.cook + sauces/Hollandaise.jpg
         assert_eq!(files.len(), 2);
-        assert!(files.iter().any(|f| f.as_str().ends_with("Hollandaise.cook")));
-        assert!(files.iter().any(|f| f.as_str().ends_with("Hollandaise.jpg")));
+        assert!(files
+            .iter()
+            .any(|f| f.as_str().ends_with("Hollandaise.cook")));
+        assert!(files
+            .iter()
+            .any(|f| f.as_str().ends_with("Hollandaise.jpg")));
     }
 
     #[test]
@@ -1412,11 +1414,7 @@ mod tests {
         let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
 
         // Recipe A references Recipe B, Recipe B references Recipe A
-        create_test_recipe(
-            &temp_dir_path,
-            "RecipeA",
-            "Use @./RecipeB{100%g} as base.",
-        );
+        create_test_recipe(&temp_dir_path, "RecipeA", "Use @./RecipeB{100%g} as base.");
         create_test_recipe(
             &temp_dir_path,
             "RecipeB",

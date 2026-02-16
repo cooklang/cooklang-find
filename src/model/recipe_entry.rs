@@ -4,6 +4,7 @@ use glob::glob;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -390,7 +391,7 @@ impl RecipeEntry {
             RecipeSource::Path { path } => path,
             RecipeSource::Content { .. } => return Vec::new(),
         };
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = HashSet::new();
         let mut result = Vec::new();
         collect_related_files(path, &mut visited, &mut result);
         result
@@ -543,8 +544,9 @@ fn parse_image_numbers(path: &Path, stem: &str, ext: &str) -> Option<Vec<usize>>
 ///
 /// Returns deduplicated list of referenced paths (without extension).
 fn extract_recipe_references(content: &str) -> Vec<String> {
-    let re = Regex::new(r"@(\.\.?/[^\s\{]+)").unwrap();
-    let mut seen = std::collections::HashSet::new();
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"@(\.\.?/[^\s\{},.)]+)").unwrap());
+    let mut seen = HashSet::new();
     let mut refs = Vec::new();
     for cap in re.captures_iter(content) {
         let path = cap[1].to_string();
@@ -561,11 +563,17 @@ fn extract_recipe_references(content: &str) -> Vec<String> {
 /// Uses `visited` to prevent cycles and deduplication.
 fn collect_related_files(
     recipe_path: &Utf8Path,
-    visited: &mut std::collections::HashSet<Utf8PathBuf>,
+    visited: &mut HashSet<Utf8PathBuf>,
     result: &mut Vec<Utf8PathBuf>,
 ) {
-    // Mark as visited to prevent cycles
-    if !visited.insert(recipe_path.to_path_buf()) {
+    // Canonicalize and mark as visited to prevent cycles
+    let canonical = match std::fs::canonicalize(recipe_path) {
+        Ok(p) => Utf8PathBuf::from_path_buf(p).unwrap_or_else(|p| {
+            Utf8PathBuf::from(p.to_string_lossy().into_owned())
+        }),
+        Err(_) => recipe_path.to_path_buf(),
+    };
+    if !visited.insert(canonical) {
         return;
     }
 
@@ -601,7 +609,13 @@ fn collect_related_files(
         };
 
         for candidate in candidates {
-            if candidate.exists() && !visited.contains(&candidate) {
+            let canonical_candidate = match std::fs::canonicalize(&candidate) {
+                Ok(p) => Utf8PathBuf::from_path_buf(p).unwrap_or_else(|p| {
+                    Utf8PathBuf::from(p.to_string_lossy().into_owned())
+                }),
+                Err(_) => candidate.clone(),
+            };
+            if candidate.exists() && !visited.contains(&canonical_candidate) {
                 result.push(candidate.clone());
                 collect_related_files(&candidate, visited, result);
             }
@@ -1434,5 +1448,19 @@ mod tests {
 
         // Missing references are silently skipped
         assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_extract_recipe_references_parent_dir() {
+        let content = "Add @../base/Stock{200%ml} and thicken.";
+        let refs = extract_recipe_references(content);
+        assert_eq!(refs, vec!["../base/Stock"]);
+    }
+
+    #[test]
+    fn test_extract_recipe_references_trailing_punctuation() {
+        let content = "Serve @./sauces/Hollandaise.";
+        let refs = extract_recipe_references(content);
+        assert_eq!(refs, vec!["./sauces/Hollandaise"]);
     }
 }

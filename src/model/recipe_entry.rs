@@ -1,6 +1,7 @@
 use super::metadata::{extract_and_parse_metadata, Metadata};
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::glob;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -510,6 +511,25 @@ fn parse_image_numbers(path: &Path, stem: &str, ext: &str) -> Option<Vec<usize>>
     } else {
         None
     }
+}
+
+/// Extracts recipe references from Cooklang content.
+///
+/// Looks for ingredient references that are relative file paths,
+/// matching the pattern `@./path/to/Recipe` with optional quantity `{...}`.
+///
+/// Returns deduplicated list of referenced paths (without extension).
+fn extract_recipe_references(content: &str) -> Vec<String> {
+    let re = Regex::new(r"@(\./[^\s\{]+)").unwrap();
+    let mut seen = std::collections::HashSet::new();
+    let mut refs = Vec::new();
+    for cap in re.captures_iter(content) {
+        let path = cap[1].to_string();
+        if seen.insert(path.clone()) {
+            refs.push(path);
+        }
+    }
+    refs
 }
 
 #[cfg(test)]
@@ -1137,5 +1157,44 @@ mod tests {
         let path = PathBuf::from("Recipe.1.2.3.jpg");
         let result = parse_image_numbers(&path, "Recipe", "jpg");
         assert_eq!(result, None);
+    }
+
+    // ========== Tests for extract_recipe_references ==========
+
+    #[test]
+    fn test_extract_recipe_references_simple() {
+        let content = "Pour @./sauces/Hollandaise{150%g} over the eggs.";
+        let refs = extract_recipe_references(content);
+        assert_eq!(refs, vec!["./sauces/Hollandaise"]);
+    }
+
+    #[test]
+    fn test_extract_recipe_references_multiple() {
+        let content = "Serve @./sauces/Hollandaise{150%g} with @./sides/Asparagus{200%g}.";
+        let refs = extract_recipe_references(content);
+        assert_eq!(refs.len(), 2);
+        assert!(refs.contains(&"./sauces/Hollandaise".to_string()));
+        assert!(refs.contains(&"./sides/Asparagus".to_string()));
+    }
+
+    #[test]
+    fn test_extract_recipe_references_no_refs() {
+        let content = "Add @salt{1%tsp} and @pepper{1%tsp}.";
+        let refs = extract_recipe_references(content);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_recipe_references_no_quantity() {
+        let content = "Serve with @./sauces/Hollandaise over eggs.";
+        let refs = extract_recipe_references(content);
+        assert_eq!(refs, vec!["./sauces/Hollandaise"]);
+    }
+
+    #[test]
+    fn test_extract_recipe_references_deduplicates() {
+        let content = "Use @./base/Stock{100%ml} twice and @./base/Stock{200%ml} again.";
+        let refs = extract_recipe_references(content);
+        assert_eq!(refs, vec!["./base/Stock"]);
     }
 }

@@ -256,6 +256,18 @@ impl FfiRecipeEntry {
             .get(&key)
             .map(|v| serde_json::to_string(v).unwrap_or_default())
     }
+
+    /// Returns all file paths related to this recipe.
+    ///
+    /// Includes images, referenced recipe files, and recursively
+    /// related files of referenced recipes.
+    pub fn related_files(&self) -> Vec<String> {
+        self.inner
+            .related_files()
+            .into_iter()
+            .map(|p| p.to_string())
+            .collect()
+    }
 }
 
 impl FfiRecipeEntry {
@@ -573,5 +585,32 @@ mod tests {
         let version = library_version();
         assert!(!version.is_empty());
         assert_eq!(version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn test_related_files_ffi() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+
+        let sauces_dir = format!("{}/sauces", temp_path);
+        fs::create_dir_all(&sauces_dir).unwrap();
+
+        // Referenced recipe with image
+        create_test_recipe(&sauces_dir, "Hollandaise", "Melt @butter{100%g}");
+        fs::write(format!("{}/Hollandaise.jpg", sauces_dir), b"").unwrap();
+
+        // Main recipe
+        let path = create_test_recipe(
+            temp_path,
+            "EggsBenedict",
+            "Pour @./sauces/Hollandaise{150%g} over eggs.",
+        );
+
+        let recipe = recipe_from_path(path).unwrap();
+        let files = recipe.related_files();
+
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|f| f.ends_with("Hollandaise.cook")));
+        assert!(files.iter().any(|f| f.ends_with("Hollandaise.jpg")));
     }
 }

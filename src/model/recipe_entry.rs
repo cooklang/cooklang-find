@@ -1,8 +1,10 @@
 use super::metadata::{extract_and_parse_metadata, Metadata};
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::glob;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -372,6 +374,28 @@ impl RecipeEntry {
             RecipeSource::Content { .. } => StepImageCollection::default(),
         })
     }
+
+    /// Returns all file paths related to this recipe.
+    ///
+    /// Includes:
+    /// - Title image (if any)
+    /// - Step/section images
+    /// - Referenced recipe .cook files (detected via `@./path` or `@../path` syntax)
+    /// - Recursively: related files of referenced recipes
+    ///
+    /// Returns an empty Vec for content-based recipes.
+    /// Missing referenced files are silently skipped.
+    /// Cycles are detected and broken automatically.
+    pub fn related_files(&self) -> Vec<Utf8PathBuf> {
+        let path = match &self.source {
+            RecipeSource::Path { path } => path,
+            RecipeSource::Content { .. } => return Vec::new(),
+        };
+        let mut visited = HashSet::new();
+        let mut result = Vec::new();
+        collect_related_files(path, &mut visited, &mut result);
+        result
+    }
 }
 
 /// Errors that can occur when working with recipe entries.
@@ -509,6 +533,91 @@ fn parse_image_numbers(path: &Path, stem: &str, ext: &str) -> Option<Vec<usize>>
         Some(numbers)
     } else {
         None
+    }
+}
+
+/// Extracts recipe references from Cooklang content.
+///
+/// Looks for ingredient references that are relative file paths,
+/// matching patterns like `@./path/to/Recipe` or `@../path/to/Recipe`
+/// with optional quantity `{...}`.
+///
+/// Returns deduplicated list of referenced paths (without extension).
+fn extract_recipe_references(content: &str) -> Vec<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"@(\.\.?/[^\s\{},.)]+)").unwrap());
+    let mut seen = HashSet::new();
+    let mut refs = Vec::new();
+    for cap in re.captures_iter(content) {
+        let path = cap[1].to_string();
+        if seen.insert(path.clone()) {
+            refs.push(path);
+        }
+    }
+    refs
+}
+
+/// Recursively collects all files related to a recipe.
+///
+/// Adds image paths and referenced recipe paths to `result`.
+/// Uses `visited` to prevent cycles and deduplication.
+fn collect_related_files(
+    recipe_path: &Utf8Path,
+    visited: &mut HashSet<Utf8PathBuf>,
+    result: &mut Vec<Utf8PathBuf>,
+) {
+    // Canonicalize and mark as visited to prevent cycles
+    let canonical = match std::fs::canonicalize(recipe_path) {
+        Ok(p) => Utf8PathBuf::from_path_buf(p)
+            .unwrap_or_else(|p| Utf8PathBuf::from(p.to_string_lossy().into_owned())),
+        Err(_) => recipe_path.to_path_buf(),
+    };
+    if !visited.insert(canonical) {
+        return;
+    }
+
+    // Collect title image
+    if let Some(image_path) = find_title_image(recipe_path) {
+        result.push(image_path);
+    }
+
+    // Collect step images
+    let step_images = find_step_images(recipe_path);
+    for steps in step_images.images.values() {
+        for image_path in steps.values() {
+            result.push(Utf8PathBuf::from(image_path));
+        }
+    }
+
+    // Read content and extract recipe references
+    let content = match std::fs::read_to_string(recipe_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let dir = recipe_path.parent().unwrap_or(recipe_path);
+    for ref_path_str in extract_recipe_references(&content) {
+        // Resolve relative to recipe's directory
+        let ref_path = dir.join(&ref_path_str);
+
+        // Try with .cook extension if no extension present
+        let candidates = if ref_path.extension().is_some() {
+            vec![ref_path]
+        } else {
+            vec![ref_path.with_extension("cook")]
+        };
+
+        for candidate in candidates {
+            let canonical_candidate = match std::fs::canonicalize(&candidate) {
+                Ok(p) => Utf8PathBuf::from_path_buf(p)
+                    .unwrap_or_else(|p| Utf8PathBuf::from(p.to_string_lossy().into_owned())),
+                Err(_) => candidate.clone(),
+            };
+            if candidate.exists() && !visited.contains(&canonical_candidate) {
+                result.push(candidate.clone());
+                collect_related_files(&candidate, visited, result);
+            }
+        }
     }
 }
 
@@ -1137,5 +1246,219 @@ mod tests {
         let path = PathBuf::from("Recipe.1.2.3.jpg");
         let result = parse_image_numbers(&path, "Recipe", "jpg");
         assert_eq!(result, None);
+    }
+
+    // ========== Tests for extract_recipe_references ==========
+
+    #[test]
+    fn test_extract_recipe_references_simple() {
+        let content = "Pour @./sauces/Hollandaise{150%g} over the eggs.";
+        let refs = extract_recipe_references(content);
+        assert_eq!(refs, vec!["./sauces/Hollandaise"]);
+    }
+
+    #[test]
+    fn test_extract_recipe_references_multiple() {
+        let content = "Serve @./sauces/Hollandaise{150%g} with @./sides/Asparagus{200%g}.";
+        let refs = extract_recipe_references(content);
+        assert_eq!(refs.len(), 2);
+        assert!(refs.contains(&"./sauces/Hollandaise".to_string()));
+        assert!(refs.contains(&"./sides/Asparagus".to_string()));
+    }
+
+    #[test]
+    fn test_extract_recipe_references_no_refs() {
+        let content = "Add @salt{1%tsp} and @pepper{1%tsp}.";
+        let refs = extract_recipe_references(content);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_recipe_references_no_quantity() {
+        let content = "Serve with @./sauces/Hollandaise over eggs.";
+        let refs = extract_recipe_references(content);
+        assert_eq!(refs, vec!["./sauces/Hollandaise"]);
+    }
+
+    #[test]
+    fn test_extract_recipe_references_deduplicates() {
+        let content = "Use @./base/Stock{100%ml} twice and @./base/Stock{200%ml} again.";
+        let refs = extract_recipe_references(content);
+        assert_eq!(refs, vec!["./base/Stock"]);
+    }
+
+    // ========== Tests for related_files ==========
+
+    #[test]
+    fn test_related_files_empty() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let recipe_path = create_test_recipe(&temp_dir_path, "simple", "Just a recipe");
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let files = recipe.related_files();
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_related_files_with_title_image() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let recipe_path = create_test_recipe(&temp_dir_path, "pasta", "Make pasta");
+        let image_path = create_test_image(&temp_dir_path, "pasta", "jpg");
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let files = recipe.related_files();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0], image_path);
+    }
+
+    #[test]
+    fn test_related_files_with_step_images() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let recipe_path = create_test_recipe(&temp_dir_path, "pasta", "Make pasta");
+        create_test_image(&temp_dir_path, "pasta.1", "jpg");
+        create_test_image(&temp_dir_path, "pasta.2", "jpg");
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let files = recipe.related_files();
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn test_related_files_content_based_returns_empty() {
+        let recipe = RecipeEntry::from_content("Just content".to_string(), None).unwrap();
+        let files = recipe.related_files();
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_related_files_with_referenced_recipe() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create a subdirectory for the referenced recipe
+        let sauces_dir = temp_dir_path.join("sauces");
+        std::fs::create_dir_all(&sauces_dir).unwrap();
+
+        // Create the referenced recipe with its own image
+        create_test_recipe(&sauces_dir, "Hollandaise", "Melt @butter{100%g}");
+        create_test_image(&sauces_dir, "Hollandaise", "jpg");
+
+        // Create the main recipe that references it
+        let recipe_path = create_test_recipe(
+            &temp_dir_path,
+            "Eggs Benedict",
+            "Pour @./sauces/Hollandaise{150%g} over eggs.",
+        );
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let files = recipe.related_files();
+
+        // Should include: sauces/Hollandaise.cook + sauces/Hollandaise.jpg
+        assert_eq!(files.len(), 2);
+        assert!(files
+            .iter()
+            .any(|f| f.as_str().ends_with("Hollandaise.cook")));
+        assert!(files
+            .iter()
+            .any(|f| f.as_str().ends_with("Hollandaise.jpg")));
+    }
+
+    #[test]
+    fn test_related_files_recursive() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+
+        let base_dir = temp_dir_path.join("base");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let sauces_dir = temp_dir_path.join("sauces");
+        std::fs::create_dir_all(&sauces_dir).unwrap();
+
+        // base/Stock.cook (leaf - no references)
+        create_test_recipe(&base_dir, "Stock", "Simmer @bones{500%g}");
+        create_test_image(&base_dir, "Stock", "png");
+
+        // sauces/Gravy.cook -> references base/Stock
+        create_test_recipe(
+            &sauces_dir,
+            "Gravy",
+            "Add @../base/Stock{200%ml} and thicken.",
+        );
+
+        // Main recipe -> references sauces/Gravy
+        let recipe_path = create_test_recipe(
+            &temp_dir_path,
+            "Roast Dinner",
+            "Serve with @./sauces/Gravy{100%ml}.",
+        );
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let files = recipe.related_files();
+
+        // Should include:
+        // - sauces/Gravy.cook (direct reference)
+        // - base/Stock.cook (transitive reference from Gravy)
+        // - base/Stock.png (image of Stock)
+        assert_eq!(files.len(), 3);
+        assert!(files.iter().any(|f| f.as_str().ends_with("Gravy.cook")));
+        assert!(files.iter().any(|f| f.as_str().ends_with("Stock.cook")));
+        assert!(files.iter().any(|f| f.as_str().ends_with("Stock.png")));
+    }
+
+    #[test]
+    fn test_related_files_circular_reference() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+
+        // Recipe A references Recipe B, Recipe B references Recipe A
+        create_test_recipe(&temp_dir_path, "RecipeA", "Use @./RecipeB{100%g} as base.");
+        create_test_recipe(
+            &temp_dir_path,
+            "RecipeB",
+            "Use @./RecipeA{50%g} as topping.",
+        );
+
+        let recipe_path = temp_dir_path.join("RecipeA.cook");
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let files = recipe.related_files();
+
+        // Should include RecipeB.cook but not loop infinitely
+        assert_eq!(files.len(), 1);
+        assert!(files.iter().any(|f| f.as_str().ends_with("RecipeB.cook")));
+    }
+
+    #[test]
+    fn test_related_files_missing_reference() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+
+        let recipe_path = create_test_recipe(
+            &temp_dir_path,
+            "incomplete",
+            "Use @./nonexistent/Recipe{100%g}.",
+        );
+
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let files = recipe.related_files();
+
+        // Missing references are silently skipped
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_extract_recipe_references_parent_dir() {
+        let content = "Add @../base/Stock{200%ml} and thicken.";
+        let refs = extract_recipe_references(content);
+        assert_eq!(refs, vec!["../base/Stock"]);
+    }
+
+    #[test]
+    fn test_extract_recipe_references_trailing_punctuation() {
+        let content = "Serve @./sauces/Hollandaise.";
+        let refs = extract_recipe_references(content);
+        assert_eq!(refs, vec!["./sauces/Hollandaise"]);
     }
 }

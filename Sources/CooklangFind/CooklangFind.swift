@@ -542,6 +542,14 @@ public protocol FfiRecipeEntryProtocol: AnyObject {
     func path() -> String?
 
     /**
+     * Returns all file paths related to this recipe.
+     *
+     * Includes images, referenced recipe files, and recursively
+     * related files of referenced recipes.
+     */
+    func relatedFiles() -> [String]
+
+    /**
      * Returns all step images for the recipe.
      */
     func stepImages() -> FfiStepImages
@@ -686,6 +694,18 @@ open class FfiRecipeEntry:
     open func path() -> String? {
         return try! FfiConverterOptionString.lift(try! rustCall {
             uniffi_cooklang_find_fn_method_ffirecipeentry_path(self.uniffiClonePointer(), $0)
+        })
+    }
+
+    /**
+     * Returns all file paths related to this recipe.
+     *
+     * Includes images, referenced recipe files, and recursively
+     * related files of referenced recipes.
+     */
+    open func relatedFiles() -> [String] {
+        return try! FfiConverterSequenceString.lift(try! rustCall {
+            uniffi_cooklang_find_fn_method_ffirecipeentry_related_files(self.uniffiClonePointer(), $0)
         })
     }
 
@@ -1873,6 +1893,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_cooklang_find_checksum_method_ffirecipeentry_path() != 52704 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_cooklang_find_checksum_method_ffirecipeentry_related_files() != 39009 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_cooklang_find_checksum_method_ffirecipeentry_step_images() != 59649 {

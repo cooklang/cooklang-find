@@ -95,7 +95,10 @@ pub fn build_tree<P: AsRef<Utf8Path>>(base_dir: P) -> Result<RecipeTree, TreeErr
             let path = Utf8PathBuf::from_path_buf(path).map_err(|_| {
                 TreeError::StripPrefixError("Path contains invalid UTF-8".to_string())
             })?;
-            let recipe = RecipeEntry::from_path(path.clone())?;
+            let recipe = match RecipeEntry::from_path(path.clone()) {
+                Ok(r) => r,
+                Err(_) => continue, // Skip files whose content isn't available (e.g. iCloud)
+            };
 
             // Calculate the relative path from the base directory
             let rel_path = path

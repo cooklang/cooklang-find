@@ -81,55 +81,17 @@ jobs:
           key: ${{ runner.os }}-ios-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-ios-cargo-
 
-      - name: Build iOS targets
-        run: |
-          cargo build --release --target aarch64-apple-ios
-          cargo build --release --target aarch64-apple-ios-sim
-          cargo build --release --target x86_64-apple-ios
-
-      - name: Generate Swift bindings
-        run: |
-          mkdir -p target/ios/swift
-          cargo run --release --features cli --bin uniffi-bindgen -- generate \
-            --library target/aarch64-apple-ios/release/libcooklang_find.a \
-            --language swift \
-            --config uniffi.toml \
-            --out-dir target/ios/swift
-
-      - name: Create XCFramework
-        run: |
-          rm -rf target/ios/CooklangFindFFI.xcframework
-          rm -rf target/ios/ios-device target/ios/ios-simulator
-          mkdir -p target/ios/ios-device target/ios/ios-simulator
-
-          cp target/aarch64-apple-ios/release/libcooklang_find.a target/ios/ios-device/
-
-          lipo -create \
-            target/aarch64-apple-ios-sim/release/libcooklang_find.a \
-            target/x86_64-apple-ios/release/libcooklang_find.a \
-            -output target/ios/ios-simulator/libcooklang_find.a
-
-          # Create headers and module maps (must be in Headers/ directory)
-          mkdir -p target/ios/ios-device/Headers target/ios/ios-simulator/Headers
-          cp target/ios/swift/CooklangFindFFI.h target/ios/ios-device/Headers/
-          cp target/ios/swift/CooklangFindFFI.h target/ios/ios-simulator/Headers/
-          echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > target/ios/ios-device/Headers/module.modulemap
-          echo 'module CooklangFindFFI { header "CooklangFindFFI.h" export * }' > target/ios/ios-simulator/Headers/module.modulemap
-
-          xcodebuild -create-xcframework \
-            -library target/ios/ios-device/libcooklang_find.a \
-            -headers target/ios/ios-device/Headers \
-            -library target/ios/ios-simulator/libcooklang_find.a \
-            -headers target/ios/ios-simulator/Headers \
-            -output target/ios/CooklangFindFFI.xcframework
+      - name: Build XCFramework
+        run: ./scripts/build-swift.sh --all
 
       - name: Package iOS artifacts
         run: |
-          cd target/ios
+          cd bindings/swift
+          mv CooklangFind.xcframework CooklangFindFFI.xcframework
           zip -r ../../CooklangFindFFI.xcframework.zip CooklangFindFFI.xcframework
           mkdir -p CooklangFind/Sources/CooklangFind
-          cp swift/CooklangFind.swift CooklangFind/Sources/CooklangFind/
-          zip -r ../../CooklangFind-ios.zip CooklangFind CooklangFindFFI.xcframework swift
+          cp Sources/CooklangFind/CooklangFind.swift CooklangFind/Sources/CooklangFind/
+          zip -r ../../CooklangFind-ios.zip CooklangFind CooklangFindFFI.xcframework Sources/CooklangFind
 
       - name: Upload iOS artifacts
         uses: actions/upload-artifact@v4
@@ -138,7 +100,7 @@ jobs:
           path: |
             CooklangFindFFI.xcframework.zip
             CooklangFind-ios.zip
-            target/ios/swift/CooklangFind.swift
+            bindings/swift/Sources/CooklangFind/CooklangFind.swift
 
   # Build Android artifacts
   build-android:
@@ -357,7 +319,7 @@ jobs:
       - name: Copy generated Swift bindings
         run: |
           mkdir -p Sources/CooklangFind
-          cp target/ios/swift/CooklangFind.swift Sources/CooklangFind/
+          cp bindings/swift/Sources/CooklangFind/CooklangFind.swift Sources/CooklangFind/
 
       - name: Commit Package.swift and Sources
         run: |

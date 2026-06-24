@@ -47,8 +47,9 @@ fn section_header_contains_date(line: &str, date: &str) -> bool {
 /// Only `.menu` files are scanned; `.cook` recipe files are ignored. A file is
 /// included if **any** of its section headers contains the `date` substring.
 /// Dates appearing only in step/body lines do not cause a match. Files that
-/// cannot be read or parsed are silently skipped. The same path is never
-/// returned twice, even if base directories overlap.
+/// cannot be read are silently skipped, as are matching files that fail to
+/// parse. The same path is never returned twice, even if base directories
+/// overlap.
 ///
 /// `date` is matched literally; this function does no date parsing or
 /// validation. The caller is responsible for computing the date string
@@ -235,6 +236,18 @@ mod tests {
 
         // Same directory passed twice -> the file must appear only once.
         let results = list_menus_for_date(&[&dir, &dir], "2026-06-24").unwrap();
+
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn finds_menus_in_subdirectories() {
+        let (_t, dir) = temp_dir();
+        let nested = dir.join("plans/june");
+        fs::create_dir_all(&nested).unwrap();
+        write_file(&nested, "week.menu", "= 2026-06-24\n\n@a{}\n");
+
+        let results = list_menus_for_date(&[&dir], "2026-06-24").unwrap();
 
         assert_eq!(results.len(), 1);
     }

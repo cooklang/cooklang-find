@@ -4,10 +4,11 @@
 //! Complex types are converted to simpler representations suitable for FFI.
 
 use crate::fetcher::{get_recipe_str, FetchError};
+use crate::menu::{list_menus_for_date as list_menus_for_date_internal, MenuError};
 use crate::model::{Metadata, RecipeEntry, RecipeEntryError, StepImageCollection};
 use crate::search::{search as search_internal, SearchError};
 use crate::tree::{build_tree as build_tree_internal, RecipeTree, TreeError};
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use std::sync::Arc;
 
 /// FFI-safe error type that wraps all possible errors.
@@ -25,6 +26,8 @@ pub enum CooklangError {
     SearchError { reason: String },
     /// Tree operation failed
     TreeError { reason: String },
+    /// Menu listing operation failed
+    MenuError { reason: String },
 }
 
 impl std::fmt::Display for CooklangError {
@@ -36,6 +39,7 @@ impl std::fmt::Display for CooklangError {
             CooklangError::InvalidPath { reason } => write!(f, "Invalid path: {}", reason),
             CooklangError::SearchError { reason } => write!(f, "Search error: {}", reason),
             CooklangError::TreeError { reason } => write!(f, "Tree error: {}", reason),
+            CooklangError::MenuError { reason } => write!(f, "Menu error: {}", reason),
         }
     }
 }
@@ -82,6 +86,14 @@ impl From<SearchError> for CooklangError {
 impl From<TreeError> for CooklangError {
     fn from(e: TreeError) -> Self {
         CooklangError::TreeError {
+            reason: e.to_string(),
+        }
+    }
+}
+
+impl From<MenuError> for CooklangError {
+    fn from(e: MenuError) -> Self {
+        CooklangError::MenuError {
             reason: e.to_string(),
         }
     }
@@ -438,6 +450,31 @@ pub fn recipe_from_path(path: String) -> Result<Arc<FfiRecipeEntry>, CooklangErr
 #[uniffi::export]
 pub fn search(base_dir: String, query: String) -> Result<Vec<Arc<FfiRecipeEntry>>, CooklangError> {
     let results = search_internal(Utf8Path::new(&base_dir), &query)?;
+    Ok(results
+        .into_iter()
+        .map(|r| Arc::new(FfiRecipeEntry::new(r)))
+        .collect())
+}
+
+/// Lists menu files that have a section header containing the given date.
+///
+/// Only `.menu` files are scanned; a file is included if any of its section
+/// headers contains the `date` substring. The date is matched literally — the
+/// caller supplies it (for example, the host app's local "today" or "tomorrow").
+///
+/// # Arguments
+/// * `base_dirs` - Root directories to scan
+/// * `date` - The date string to match (e.g. "2026-06-24")
+///
+/// # Returns
+/// List of matching menu recipes.
+#[uniffi::export]
+pub fn list_menus_for_date(
+    base_dirs: Vec<String>,
+    date: String,
+) -> Result<Vec<Arc<FfiRecipeEntry>>, CooklangError> {
+    let dirs: Vec<Utf8PathBuf> = base_dirs.into_iter().map(Utf8PathBuf::from).collect();
+    let results = list_menus_for_date_internal(&dirs, &date)?;
     Ok(results
         .into_iter()
         .map(|r| Arc::new(FfiRecipeEntry::new(r)))

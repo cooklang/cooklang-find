@@ -42,6 +42,9 @@ pub mod fetcher;
 /// UniFFI bindings for cross-platform support (iOS, Android).
 pub mod ffi;
 
+/// Menu discovery by date (sections containing a date string).
+pub mod menu;
+
 /// Core data models for recipes and metadata.
 pub mod model;
 
@@ -52,6 +55,7 @@ pub mod search;
 pub mod tree;
 
 pub use fetcher::{get_recipe, get_recipe_str};
+pub use menu::list_menus_for_date;
 pub use model::*;
 pub use search::search;
 pub use tree::{build_tree, RecipeTree};

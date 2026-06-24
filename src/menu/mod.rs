@@ -200,7 +200,11 @@ mod tests {
     #[test]
     fn excludes_date_only_in_body() {
         let (_t, dir) = temp_dir();
-        write_file(&dir, "week.menu", "= Dinner\n\nMade on 2026-06-24 with @eggs{}\n");
+        write_file(
+            &dir,
+            "week.menu",
+            "= Dinner\n\nMade on 2026-06-24 with @eggs{}\n",
+        );
 
         let results = list_menus_for_date(&[&dir], "2026-06-24").unwrap();
 

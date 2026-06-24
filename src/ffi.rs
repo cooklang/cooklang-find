@@ -4,8 +4,8 @@
 //! Complex types are converted to simpler representations suitable for FFI.
 
 use crate::fetcher::{get_recipe_str, FetchError};
-use crate::model::{Metadata, RecipeEntry, RecipeEntryError, StepImageCollection};
 use crate::menu::{list_menus_for_date as list_menus_for_date_internal, MenuError};
+use crate::model::{Metadata, RecipeEntry, RecipeEntryError, StepImageCollection};
 use crate::search::{search as search_internal, SearchError};
 use crate::tree::{build_tree as build_tree_internal, RecipeTree, TreeError};
 use camino::{Utf8Path, Utf8PathBuf};

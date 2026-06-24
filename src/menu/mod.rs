@@ -85,21 +85,19 @@ pub fn list_menus_for_date<P: AsRef<Utf8Path>>(
                 continue;
             }
 
-            let recipe = match RecipeEntry::from_path(path.clone()) {
-                Ok(r) => r,
-                Err(_) => continue, // Skip files whose content isn't available
-            };
-
-            let content = match recipe.content() {
+            let content = match std::fs::read_to_string(&path) {
                 Ok(c) => c,
-                Err(_) => continue,
+                Err(_) => continue, // Skip files whose content isn't available
             };
 
             if content
                 .lines()
                 .any(|line| section_header_contains_date(line, date))
             {
-                menus.push(recipe);
+                match RecipeEntry::from_path(path) {
+                    Ok(recipe) => menus.push(recipe),
+                    Err(_) => continue, // Skip files that can't be parsed
+                }
             }
         }
     }
@@ -228,5 +226,16 @@ mod tests {
         let results = list_menus_for_date(&[&dir], "2026-06-24").unwrap();
 
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn dedups_overlapping_base_dirs() {
+        let (_t, dir) = temp_dir();
+        write_file(&dir, "week.menu", "= 2026-06-24\n\n@a{}\n");
+
+        // Same directory passed twice -> the file must appear only once.
+        let results = list_menus_for_date(&[&dir, &dir], "2026-06-24").unwrap();
+
+        assert_eq!(results.len(), 1);
     }
 }

@@ -42,6 +42,9 @@ pub mod fetcher;
 /// UniFFI bindings for cross-platform support (iOS, Android).
 pub mod ffi;
 
+/// Menu discovery by date (sections containing a date string).
+pub mod menu;
+
 /// Core data models for recipes and metadata.
 pub mod model;
 

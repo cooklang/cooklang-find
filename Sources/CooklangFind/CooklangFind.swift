@@ -1459,6 +1459,10 @@ public enum CooklangError {
      * Tree operation failed
      */
     case TreeError(reason: String)
+    /**
+     * Menu listing operation failed
+     */
+    case MenuError(reason: String)
 }
 
 #if swift(>=5.8)
@@ -1486,6 +1490,9 @@ public struct FfiConverterTypeCooklangError: FfiConverterRustBuffer {
                 reason: FfiConverterString.read(from: &buf)
             )
         case 6: return try .TreeError(
+                reason: FfiConverterString.read(from: &buf)
+            )
+        case 7: return try .MenuError(
                 reason: FfiConverterString.read(from: &buf)
             )
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -1516,6 +1523,10 @@ public struct FfiConverterTypeCooklangError: FfiConverterRustBuffer {
 
         case let .TreeError(reason):
             writeInt(&buf, Int32(6))
+            FfiConverterString.write(reason, into: &buf)
+
+        case let .MenuError(reason):
+            writeInt(&buf, Int32(7))
             FfiConverterString.write(reason, into: &buf)
         }
     }
@@ -1777,6 +1788,29 @@ public func libraryVersion() -> String {
 }
 
 /**
+ * Lists menu files that have a section header containing the given date.
+ *
+ * Only `.menu` files are scanned; a file is included if any of its section
+ * headers contains the `date` substring. The date is matched literally — the
+ * caller supplies it (for example, the host app's local "today" or "tomorrow").
+ *
+ * # Arguments
+ * * `base_dirs` - Root directories to scan
+ * * `date` - The date string to match (e.g. "2026-06-24")
+ *
+ * # Returns
+ * List of matching menu recipes.
+ */
+public func listMenusForDate(baseDirs: [String], date: String) throws -> [FfiRecipeEntry] {
+    return try FfiConverterSequenceTypeFfiRecipeEntry.lift(rustCallWithError(FfiConverterTypeCooklangError.lift) {
+        uniffi_cooklang_find_fn_func_list_menus_for_date(
+            FfiConverterSequenceString.lower(baseDirs),
+            FfiConverterString.lower(date), $0
+        )
+    })
+}
+
+/**
  * Creates a recipe from file content.
  *
  * Useful for creating recipes from sources other than files,
@@ -1860,6 +1894,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_cooklang_find_checksum_func_library_version() != 55411 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_cooklang_find_checksum_func_list_menus_for_date() != 43406 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_cooklang_find_checksum_func_recipe_from_content() != 23295 {

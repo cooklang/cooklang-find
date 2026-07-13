@@ -28,18 +28,22 @@
 //!
 //! ## UniFFI Support
 //!
-//! This library includes UniFFI bindings for use on iOS and Android.
-//! The FFI module provides simplified, FFI-safe types and functions.
+//! This library includes UniFFI bindings for use on iOS and Android, behind the
+//! `ffi` feature. It is enabled by default, so the mobile bindings build
+//! unchanged; the `ffi` module provides simplified, FFI-safe types and functions.
 //!
-//! See the [`ffi`] module for FFI-specific types and functions.
+//! Rust-only consumers should depend on this crate with `default-features = false`
+//! to avoid compiling uniffi and its bindgen chain.
 
 // UniFFI scaffolding - must be at crate root
+#[cfg(feature = "ffi")]
 uniffi::setup_scaffolding!();
 
 /// Recipe fetching utilities for loading recipes by name.
 pub mod fetcher;
 
 /// UniFFI bindings for cross-platform support (iOS, Android).
+#[cfg(feature = "ffi")]
 pub mod ffi;
 
 /// Menu discovery by date (sections containing a date string).

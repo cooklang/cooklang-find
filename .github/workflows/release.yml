@@ -608,3 +608,47 @@ jobs:
         run: |
           gradle wrapper --gradle-version 8.5
           ./gradlew publish --no-daemon
+
+  # Publish the Rust crate to crates.io
+  #
+  # This was missing: the workflow tagged a version and cut a GitHub release,
+  # but never reached crates.io - so downstream crates, which resolve from the
+  # registry, could not see the release at all. See cooklang/cookcli#366.
+  #
+  # Runs after create-release so it publishes the same commit that was tagged
+  # (create-release depends on prepare-release, which pushes the version bump).
+  publish-rust:
+    name: Publish to crates.io
+    needs: [prepare-release, create-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required by crates-io-auth-action for OIDC trusted publishing.
+      id-token: write
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify the tagged version is what we are publishing
+        run: |
+          MANIFEST_VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          EXPECTED="${{ needs.prepare-release.outputs.version }}"
+          if [ "$MANIFEST_VERSION" != "$EXPECTED" ]; then
+            echo "::error::Cargo.toml is at ${MANIFEST_VERSION} but releasing ${EXPECTED}"
+            exit 1
+          fi
+          echo "Publishing ${MANIFEST_VERSION}"
+
+      - name: Authenticate to crates.io
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish

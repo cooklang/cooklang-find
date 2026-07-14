@@ -45,6 +45,20 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Catches packaging problems (missing files, bad metadata) on a PR,
+      # rather than when a release tries to publish to crates.io.
+      - name: Check the crate packages cleanly
+        run: cargo publish --dry-run
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

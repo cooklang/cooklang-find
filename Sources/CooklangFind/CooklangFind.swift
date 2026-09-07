@@ -1191,6 +1191,13 @@ public struct FfiTreeNode {
      * Names of child nodes
      */
     public let children: [String]
+    /**
+     * Number of recipes in this subtree, however deeply nested.
+     *
+     * A recipe node reports `1`; a directory node reports every recipe it
+     * holds, including those in its subdirectories.
+     */
+    public let recipeCount: UInt32
 
     /// Default memberwise initializers are never public by default, so we
     /// declare one manually.
@@ -1206,12 +1213,19 @@ public struct FfiTreeNode {
             */ hasRecipe: Bool,
         /* 
             * Names of child nodes
-            */ children: [String]
+            */ children: [String],
+        /* 
+            * Number of recipes in this subtree, however deeply nested.
+            *
+            * A recipe node reports `1`; a directory node reports every recipe it
+            * holds, including those in its subdirectories.
+            */ recipeCount: UInt32
     ) {
         self.name = name
         self.path = path
         self.hasRecipe = hasRecipe
         self.children = children
+        self.recipeCount = recipeCount
     }
 }
 
@@ -1229,6 +1243,9 @@ extension FfiTreeNode: Equatable, Hashable {
         if lhs.children != rhs.children {
             return false
         }
+        if lhs.recipeCount != rhs.recipeCount {
+            return false
+        }
         return true
     }
 
@@ -1237,6 +1254,7 @@ extension FfiTreeNode: Equatable, Hashable {
         hasher.combine(path)
         hasher.combine(hasRecipe)
         hasher.combine(children)
+        hasher.combine(recipeCount)
     }
 }
 
@@ -1250,7 +1268,8 @@ public struct FfiConverterTypeFfiTreeNode: FfiConverterRustBuffer {
                 name: FfiConverterString.read(from: &buf),
                 path: FfiConverterString.read(from: &buf),
                 hasRecipe: FfiConverterBool.read(from: &buf),
-                children: FfiConverterSequenceString.read(from: &buf)
+                children: FfiConverterSequenceString.read(from: &buf),
+                recipeCount: FfiConverterUInt32.read(from: &buf)
             )
     }
 
@@ -1259,6 +1278,7 @@ public struct FfiConverterTypeFfiTreeNode: FfiConverterRustBuffer {
         FfiConverterString.write(value.path, into: &buf)
         FfiConverterBool.write(value.hasRecipe, into: &buf)
         FfiConverterSequenceString.write(value.children, into: &buf)
+        FfiConverterUInt32.write(value.recipeCount, into: &buf)
     }
 }
 

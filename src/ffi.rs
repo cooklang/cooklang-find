@@ -299,6 +299,11 @@ pub struct FfiTreeNode {
     pub has_recipe: bool,
     /// Names of child nodes
     pub children: Vec<String>,
+    /// Number of recipes in this subtree, however deeply nested.
+    ///
+    /// A recipe node reports `1`; a directory node reports every recipe it
+    /// holds, including those in its subdirectories.
+    pub recipe_count: u32,
 }
 
 /// FFI-safe representation of a recipe tree.
@@ -360,6 +365,7 @@ fn tree_to_node(tree: &RecipeTree) -> FfiTreeNode {
         path: tree.path.to_string(),
         has_recipe: tree.recipe.is_some(),
         children: tree.children.keys().cloned().collect(),
+        recipe_count: tree.recipe_count() as u32,
     }
 }
 
@@ -591,6 +597,25 @@ mod tests {
 
         let recipes = tree.all_recipes();
         assert_eq!(recipes.len(), 1);
+    }
+
+    #[test]
+    fn test_tree_node_reports_recursive_recipe_count() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+
+        // "household" holds no recipe of its own, only a subdirectory that does.
+        let laundry_dir = format!("{}/household/laundry", temp_path);
+        fs::create_dir_all(&laundry_dir).unwrap();
+        create_test_recipe(&laundry_dir, "detergent", "Mix detergent");
+        create_test_recipe(&laundry_dir, "softener", "Mix softener");
+
+        let tree = build_tree(temp_path.to_string()).unwrap();
+
+        let household = tree.get_child("household".to_string()).unwrap();
+        assert!(!household.has_recipe);
+        assert_eq!(household.recipe_count, 2);
+        assert_eq!(tree.root().recipe_count, 2);
     }
 
     #[test]

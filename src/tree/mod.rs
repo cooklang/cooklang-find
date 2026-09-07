@@ -306,6 +306,61 @@ mod tests {
     }
 
     #[test]
+    fn test_recipe_count_includes_nested_directories() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+
+        // One recipe directly in the directory, two more in a subdirectory.
+        let bakery = temp_dir_path.join("bakery");
+        let breads = bakery.join("breads");
+        fs::create_dir_all(&breads).unwrap();
+        create_test_recipe(&bakery, "pita", "Bake pita");
+        create_test_recipe(&breads, "sourdough", "Bake sourdough");
+        create_test_recipe(&breads, "focaccia", "Bake focaccia");
+
+        let tree = build_tree(&temp_dir_path).unwrap();
+
+        let bakery_node = tree.children.get("bakery").unwrap();
+        assert_eq!(bakery_node.recipe_count(), 3);
+        assert_eq!(
+            bakery_node.children.get("breads").unwrap().recipe_count(),
+            2
+        );
+        assert_eq!(tree.recipe_count(), 3);
+    }
+
+    #[test]
+    fn test_recipe_count_of_directory_holding_only_subdirectories() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+
+        // "household" holds no recipe of its own, only subdirectories that do.
+        let household = temp_dir_path.join("household");
+        fs::create_dir_all(household.join("laundry")).unwrap();
+        fs::create_dir_all(household.join("floors")).unwrap();
+        create_test_recipe(&household.join("laundry"), "detergent", "Mix detergent");
+        create_test_recipe(&household.join("floors"), "cleaner", "Mix cleaner");
+        create_test_recipe(&household.join("floors"), "polish", "Mix polish");
+
+        let tree = build_tree(&temp_dir_path).unwrap();
+
+        let household_node = tree.children.get("household").unwrap();
+        assert!(household_node.recipe.is_none());
+        assert_eq!(household_node.recipe_count(), 3);
+    }
+
+    #[test]
+    fn test_recipe_count_of_a_recipe_node_is_one() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        create_test_recipe(&temp_dir_path, "pancakes", "Make pancakes");
+
+        let tree = build_tree(&temp_dir_path).unwrap();
+
+        assert_eq!(tree.children.get("pancakes").unwrap().recipe_count(), 1);
+    }
+
+    #[test]
     fn test_invalid_directory() {
         let result = build_tree(Utf8Path::new("/nonexistent/directory"));
         assert!(result.is_err());

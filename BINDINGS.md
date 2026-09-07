@@ -318,6 +318,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | `path` | `String` | Full path |
 | `hasRecipe` | `Boolean` | Whether node has a recipe |
 | `children` | `List<String>` | Child node names |
+| `recipeCount` | `UInt` | Recipes in this subtree, including nested ones |
 
 ## CI/CD
 

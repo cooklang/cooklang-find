@@ -48,4 +48,19 @@ impl RecipeTree {
             children: HashMap::new(),
         }
     }
+
+    /// Number of recipes in this subtree.
+    ///
+    /// Counts this node when it carries a recipe, plus every recipe below it.
+    /// A recipe node therefore counts as `1`, and a directory node reports all
+    /// the recipes it holds however deeply they are nested — which is what a
+    /// browsing UI needs to show next to a folder.
+    pub fn recipe_count(&self) -> usize {
+        let own = usize::from(self.recipe.is_some());
+        own + self
+            .children
+            .values()
+            .map(RecipeTree::recipe_count)
+            .sum::<usize>()
+    }
 }

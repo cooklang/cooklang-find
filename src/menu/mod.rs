@@ -8,6 +8,7 @@
 //! The library performs no date parsing or timezone handling: the caller
 //! supplies the date as an opaque string that is matched literally.
 
+use crate::model::lossy::read_to_string_lossy;
 use crate::model::RecipeEntry;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::HashSet;
@@ -86,7 +87,11 @@ pub fn list_menus_for_date<P: AsRef<Utf8Path>>(
                 continue;
             }
 
-            let content = match std::fs::read_to_string(&path) {
+            // Decoded lossily, so a menu with a stray non-UTF-8 byte is still
+            // scanned for its date rather than skipped.
+            let content = match std::fs::File::open(&path)
+                .and_then(|file| read_to_string_lossy(&mut std::io::BufReader::new(file)))
+            {
                 Ok(c) => c,
                 Err(_) => continue, // Skip files whose content isn't available
             };

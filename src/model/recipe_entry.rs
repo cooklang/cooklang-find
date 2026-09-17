@@ -1,3 +1,4 @@
+use super::lossy::{lines_lossy, read_to_string_lossy};
 use super::metadata::{extract_and_parse_metadata, Metadata};
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::glob;
@@ -6,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::path::Path;
 use std::sync::OnceLock;
 use thiserror::Error;
@@ -151,7 +152,9 @@ impl RecipeEntry {
     /// Creates a new `RecipeEntry` from a file path.
     ///
     /// Reads the recipe file, extracts metadata from YAML frontmatter,
-    /// and creates a fully initialized recipe entry.
+    /// and creates a fully initialized recipe entry. Bytes that are not valid
+    /// UTF-8 are decoded lossily rather than refused; see the `lossy` module
+    /// for why.
     ///
     /// # Arguments
     ///
@@ -167,7 +170,7 @@ impl RecipeEntry {
         let reader = BufReader::new(file);
 
         let metadata = extract_and_parse_metadata(
-            reader.lines().map(|r| r.map_err(RecipeEntryError::IoError)),
+            lines_lossy(reader).map(|r| r.map_err(RecipeEntryError::IoError)),
         )?;
 
         Ok(RecipeEntry {
@@ -257,7 +260,9 @@ impl RecipeEntry {
 
     /// Returns the full content of the recipe.
     ///
-    /// For path-based recipes, this reads the file from disk.
+    /// For path-based recipes, this reads the file from disk, decoding bytes
+    /// that are not valid UTF-8 lossily rather than refusing the file; see the
+    /// `lossy` module for why.
     /// For content-based recipes, this returns the stored content.
     ///
     /// # Errors
@@ -267,7 +272,8 @@ impl RecipeEntry {
     pub fn content(&self) -> Result<String, RecipeEntryError> {
         match &self.source {
             RecipeSource::Path { path } => {
-                std::fs::read_to_string(path).map_err(RecipeEntryError::IoError)
+                let file = File::open(path).map_err(RecipeEntryError::IoError)?;
+                read_to_string_lossy(&mut BufReader::new(file)).map_err(RecipeEntryError::IoError)
             }
             RecipeSource::Content { content, .. } => Ok(content.clone()),
         }
@@ -589,8 +595,11 @@ fn collect_related_files(
         }
     }
 
-    // Read content and extract recipe references
-    let content = match std::fs::read_to_string(recipe_path) {
+    // Read content and extract recipe references. Decoded lossily, so a recipe
+    // with a stray non-UTF-8 byte still has its references followed.
+    let content = match File::open(recipe_path)
+        .and_then(|file| read_to_string_lossy(&mut BufReader::new(file)))
+    {
         Ok(c) => c,
         Err(_) => return,
     };

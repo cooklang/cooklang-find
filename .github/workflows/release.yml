@@ -129,13 +129,20 @@ jobs:
           key: ${{ runner.os }}-android-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-android-cargo-
 
+      # Same action and NDK revision as build-bindings.yml (r26b is
+      # 26.1.10909125), so every PR exercises this path before release day.
+      # `android-actions/setup-android` installed the obsolete `tools` package
+      # by default, which the SDK repository no longer carries, and it broke
+      # the 0.7.1 release with "Failed to find package 'tools'".
       - name: Setup Android NDK
-        uses: android-actions/setup-android@v3
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26b
+          add-to-path: true
 
-      - name: Install NDK
-        run: |
-          sdkmanager --install "ndk;26.1.10909125"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
+      - name: Export NDK location
+        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
 
       - name: Install cargo-ndk
         run: command -v cargo-ndk || cargo install cargo-ndk --locked
@@ -462,6 +469,10 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # Drops the obsolete `tools` from the default `tools platform-tools`;
+          # it is gone from the SDK repository and fails the install.
+          packages: 'platform-tools'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3

@@ -3,6 +3,7 @@
 //! This module contains the fundamental data structures used throughout
 //! the library, including recipe entries and their associated metadata.
 
+pub(crate) mod lossy;
 mod metadata;
 mod recipe_entry;
 

@@ -3,10 +3,11 @@
 //! This module provides full-text search capabilities for recipe files,
 //! supporting both filename and content matching with relevance scoring.
 
+use crate::model::lossy::lines_lossy;
 use crate::model::{RecipeEntry, RecipeEntryError};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufReader};
 use thiserror::Error;
 
 mod model;
@@ -152,12 +153,15 @@ fn score_content_matches(path: &Utf8Path, terms: &[String]) -> io::Result<f64> {
 }
 
 /// Count how many times the terms appear in the file
+///
+/// Lines are decoded lossily, so a recipe carrying a stray non-UTF-8 byte is
+/// still scored on the text around it instead of scoring zero.
 fn count_matches(path: &Utf8Path, terms: &[String]) -> io::Result<usize> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut total_matches = 0;
 
-    for line in reader.lines() {
+    for line in lines_lossy(reader) {
         let line = line?.to_lowercase();
         total_matches += terms
             .iter()
@@ -309,6 +313,51 @@ mod tests {
         assert_eq!(results[0].path, Utf8PathBuf::from("c.cook")); // Highest score
         assert_eq!(results[1].path, Utf8PathBuf::from("a.cook")); // Same score, alphabetically first
         assert_eq!(results[2].path, Utf8PathBuf::from("b.cook")); // Same score, alphabetically second
+    }
+
+    /// A recipe whose bytes are not valid UTF-8 must not break the search.
+    ///
+    /// Before this, `search` propagated the `InvalidData` error that
+    /// `BufRead::lines` raises for such a file, so a single Latin-1 recipe
+    /// failed every query that reached it — and the caller only learned that
+    /// "stream did not contain valid UTF-8" somewhere under the root
+    /// (<https://github.com/cooklang/cookcli/issues/498>).
+    #[test]
+    fn test_search_tolerates_files_that_are_not_valid_utf8() {
+        let temp_dir = setup_test_recipes();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        // Latin-1: the 0xe9 stands for an "é" that never made it to UTF-8.
+        fs::write(
+            temp_dir_path.join("tuna mornay.cook"),
+            b"---\ntitle: Tuna Mornay \xe9\n---\n\nBake @tuna{1%can} with cr\xe8me.\n",
+        )
+        .unwrap();
+
+        // Matched by file name, which is how the reported failure was reached:
+        // the file scores even though its content could not be read.
+        let by_name =
+            search(&temp_dir_path, "mornay").expect("a bad byte must not fail the search");
+        assert_eq!(by_name.len(), 1);
+        assert_eq!(by_name[0].name().as_ref().unwrap(), "Tuna Mornay \u{fffd}");
+
+        // And matched by content, so the recipe is still findable by the
+        // ingredient the user was actually looking for.
+        let by_content =
+            search(&temp_dir_path, "tuna").expect("a bad byte must not fail the search");
+        assert_eq!(by_content.len(), 1);
+        assert_eq!(
+            by_content[0].path().unwrap().file_name().unwrap(),
+            "tuna mornay.cook"
+        );
+
+        // The readable text around the bad byte is still readable.
+        assert!(by_content[0]
+            .content()
+            .unwrap()
+            .contains("Bake @tuna{1%can}"));
+
+        // Every other recipe is unaffected.
+        assert_eq!(search(&temp_dir_path, "pancakes").unwrap().len(), 1);
     }
 
     #[test]

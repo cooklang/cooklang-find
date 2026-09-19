@@ -1891,6 +1891,39 @@ public func search(baseDir: String, query: String) throws -> [FfiRecipeEntry] {
     })
 }
 
+/**
+ * Searches for recipes matching a query string, keeping only those whose
+ * frontmatter also satisfies a metadata filter.
+ *
+ * This is the FFI entry point for the metadata-only search API: rather than
+ * exposing the filter grammar as a set of FFI types (which would need to be
+ * kept in lockstep across every platform binding), it takes the filter as
+ * the same JSON string documented on [`crate::MetadataFilter`] — e.g.
+ * `{"where": {"source": {"contains": "koreanbapsang"}}}`. An empty
+ * `query` behaves like a pure metadata filter (see
+ * [`crate::filter_by_metadata`]): nothing but frontmatter is read, and no
+ * relevance scoring is performed.
+ *
+ * # Arguments
+ * * `base_dir` - Root directory to search in
+ * * `query` - Search query (can be empty for a metadata-only filter)
+ * * `filter_json` - The metadata filter, as JSON (see [`crate::MetadataFilter`])
+ *
+ * # Returns
+ * List of matching recipes, in `search`'s relevance order if `query` is
+ * non-empty, or sorted by path otherwise. An invalid `filter_json` is
+ * reported as `CooklangError::ParseError`.
+ */
+public func searchWithMetadataFilter(baseDir: String, query: String, filterJson: String) throws -> [FfiRecipeEntry] {
+    return try FfiConverterSequenceTypeFfiRecipeEntry.lift(rustCallWithError(FfiConverterTypeCooklangError.lift) {
+        uniffi_cooklang_find_fn_func_search_with_metadata_filter(
+            FfiConverterString.lower(baseDir),
+            FfiConverterString.lower(query),
+            FfiConverterString.lower(filterJson), $0
+        )
+    })
+}
+
 private enum InitializationResult {
     case ok
     case contractVersionMismatch
@@ -1926,6 +1959,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_cooklang_find_checksum_func_search() != 59640 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_cooklang_find_checksum_func_search_with_metadata_filter() != 36687 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_cooklang_find_checksum_method_ffirecipeentry_content() != 46621 {

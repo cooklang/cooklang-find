@@ -73,8 +73,10 @@ impl<'de> Deserialize<'de> for OneOrMany {
 /// Deserializes from a single-key JSON object naming the operator:
 ///
 /// - `{ "contains": "x" }` or `{ "contains": ["x", "y"] }` — case-insensitive
-///   substring match against any [candidate string](value_candidate_strings)
-///   of the value; true if *any* needle matches *any* candidate.
+///   substring match against any candidate string of the value (a scalar is
+///   its own candidate; a sequence or mapping contributes the candidates of
+///   each of its elements/values); true if *any* needle matches *any*
+///   candidate.
 /// - `{ "equals": "x" }` — case-insensitive whole-string equality against
 ///   any candidate string of the value.
 /// - `{ "has": "x" }` — the value, read as a list the way

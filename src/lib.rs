@@ -61,5 +61,7 @@ pub mod tree;
 pub use fetcher::{get_recipe, get_recipe_str};
 pub use menu::list_menus_for_date;
 pub use model::*;
-pub use search::search;
+pub use search::{
+    filter_by_metadata, search, search_with_filter, Condition, MetadataFilter, OneOrMany,
+};
 pub use tree::{build_tree, RecipeTree};

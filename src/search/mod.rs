@@ -10,8 +10,10 @@ use std::fs::File;
 use std::io::{self, BufReader};
 use thiserror::Error;
 
+mod filter;
 mod model;
 
+pub use filter::{Condition, MetadataFilter, OneOrMany};
 pub use model::SearchResult;
 
 /// Errors that can occur during recipe searching.
@@ -74,6 +76,127 @@ pub fn search(base_dir: &Utf8Path, query: &str) -> Result<Vec<RecipeEntry>, Sear
     }
 
     Ok(recipes)
+}
+
+/// Lists every `.cook`/`.menu` recipe under `base_dir` whose frontmatter
+/// satisfies `filter`, without reading past the frontmatter of any file (see
+/// [`RecipeEntry::from_path`], which reads only the YAML front matter block).
+///
+/// Unlike [`search`], a file that can't be turned into a `RecipeEntry` (an
+/// I/O error — a permissions problem, a file that disappears mid-walk, and
+/// so on) is skipped rather than aborting the whole listing: it can't
+/// satisfy any filter, so the metadata-only contract this function makes is
+/// "here is everything that does", not "here is everything, or nothing if
+/// one file was unreadable". See the crate's `search_with_filter` docs for
+/// why this differs from `search`'s behavior, which this function does not
+/// change.
+///
+/// Results are sorted by path for stable output (there is no relevance
+/// score to sort by, since there is no query).
+///
+/// # Examples
+///
+/// ```no_run
+/// use cooklang_find::{filter_by_metadata, MetadataFilter};
+/// use camino::Utf8Path;
+///
+/// let filter = MetadataFilter::from_json(r#"{"where": {"cuisine": {"equals": "Japanese"}}}"#)?;
+/// let recipes = filter_by_metadata(Utf8Path::new("./recipes"), &filter)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn filter_by_metadata(
+    base_dir: &Utf8Path,
+    filter: &MetadataFilter,
+) -> Result<Vec<RecipeEntry>, SearchError> {
+    let paths = walk_recipe_paths(base_dir)?;
+    let mut recipes = Vec::new();
+
+    for path in paths {
+        let Ok(recipe) = RecipeEntry::from_path(path) else {
+            // Can't read this file's frontmatter, so it can't satisfy any
+            // filter; skip it rather than failing the whole listing.
+            continue;
+        };
+        if filter.matches(&recipe) {
+            recipes.push(recipe);
+        }
+    }
+
+    Ok(recipes)
+}
+
+/// Runs [`search`] (same scoring, same relevance order) and keeps only the
+/// results that also satisfy `filter`.
+///
+/// A blank (empty or whitespace-only) `query` is equivalent to
+/// [`filter_by_metadata`]: no filename/content scoring is performed, so no
+/// recipe body is read unless `filter` itself needs one — which it never
+/// does, since `MetadataFilter` only ever looks at frontmatter. A non-blank
+/// query does read recipe bodies, exactly as `search` already does, in
+/// order to score content matches.
+///
+/// As with [`filter_by_metadata`], a file that can't be turned into a
+/// `RecipeEntry` is skipped rather than aborting the whole search.
+///
+/// # Examples
+///
+/// ```no_run
+/// use cooklang_find::{search_with_filter, MetadataFilter};
+/// use camino::Utf8Path;
+///
+/// let filter = MetadataFilter::from_json(r#"{"where": {"tags": {"has": "korean"}}}"#)?;
+/// let recipes = search_with_filter(Utf8Path::new("./recipes"), "stew", &filter)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn search_with_filter(
+    base_dir: &Utf8Path,
+    query: &str,
+    filter: &MetadataFilter,
+) -> Result<Vec<RecipeEntry>, SearchError> {
+    if query.trim().is_empty() {
+        return filter_by_metadata(base_dir, filter);
+    }
+
+    let paths = search_paths(base_dir, query)?;
+    let mut recipes = Vec::new();
+
+    for path in paths {
+        let Ok(recipe) = RecipeEntry::from_path(path) else {
+            continue;
+        };
+        if filter.matches(&recipe) {
+            recipes.push(recipe);
+        }
+    }
+
+    Ok(recipes)
+}
+
+/// Every `.cook`/`.menu` path under `base_dir`, sorted for stable output.
+/// Does no scoring and opens no files — the pure directory walk that backs
+/// [`filter_by_metadata`].
+fn walk_recipe_paths(base_dir: &Utf8Path) -> Result<Vec<Utf8PathBuf>, SearchError> {
+    let mut paths = Vec::new();
+    let patterns = [
+        base_dir.join("**/*.cook").to_string(),
+        base_dir.join("**/*.menu").to_string(),
+    ];
+
+    for pattern in patterns {
+        for entry in glob::glob(&pattern)? {
+            let path = entry?;
+            let path = Utf8PathBuf::from_path_buf(path).map_err(|_| {
+                SearchError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Path contains invalid UTF-8",
+                ))
+            })?;
+            paths.push(path);
+        }
+    }
+
+    paths.sort();
+    Ok(paths)
 }
 
 /// Search for .cook and .menu files in a directory and return scored results
@@ -365,5 +488,273 @@ mod tests {
         let result = search(Utf8Path::new("/nonexistent/directory"), "query");
         assert!(result.is_ok()); // Search should succeed but return empty results
         assert!(result.unwrap().is_empty());
+    }
+
+    // ---- filter_by_metadata / search_with_filter ----
+
+    fn create_test_menu(dir: &Utf8Path, name: &str, content: &str) -> Utf8PathBuf {
+        let path = dir.join(format!("{name}.menu"));
+        fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn filter_by_metadata_keeps_only_matching_recipes() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        create_test_recipe(&dir, "kimchi_stew", "---\ncuisine: Korean\n---\n\nBody");
+        create_test_recipe(&dir, "ramen", "---\ncuisine: Japanese\n---\n\nBody");
+
+        let filter =
+            MetadataFilter::from_json(r#"{"where": {"cuisine": {"equals": "Korean"}}}"#).unwrap();
+        let results = filter_by_metadata(&dir, &filter).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name().as_ref().unwrap(), "kimchi_stew");
+    }
+
+    #[test]
+    fn filter_by_metadata_includes_menu_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        create_test_menu(&dir, "this_week", "---\ntheme: Korean\n---\n\n## Monday\n");
+
+        let filter =
+            MetadataFilter::from_json(r#"{"where": {"theme": {"equals": "Korean"}}}"#).unwrap();
+        let results = filter_by_metadata(&dir, &filter).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_menu());
+    }
+
+    #[test]
+    fn filter_by_metadata_with_an_empty_filter_matches_everything() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        create_test_recipe(&dir, "a", "Body only");
+        create_test_recipe(&dir, "b", "---\ntitle: B\n---\n\nBody");
+
+        let results = filter_by_metadata(&dir, &MetadataFilter::default()).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn filter_by_metadata_sorts_results_by_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        create_test_recipe(&dir, "waffles", "Body");
+        create_test_recipe(&dir, "apples", "Body");
+        create_test_recipe(&dir, "muffins", "Body");
+
+        let results = filter_by_metadata(&dir, &MetadataFilter::default()).unwrap();
+        let paths: Vec<String> = results
+            .iter()
+            .map(|r| r.path().unwrap().to_string())
+            .collect();
+        let mut sorted = paths.clone();
+        sorted.sort();
+        assert_eq!(paths, sorted);
+    }
+
+    /// A file whose frontmatter is malformed YAML must not abort the whole
+    /// listing (unlike `search`, which propagates any single file's read
+    /// error — see this module's `search_with_filter` docs). Today,
+    /// malformed YAML doesn't even make `RecipeEntry::from_path` return an
+    /// error: `extract_and_parse_metadata` falls back to empty metadata (see
+    /// `model::metadata::parse_yaml_content`), so the file below is
+    /// included, just with no metadata — which fails a filter that requires
+    /// a key that can't be inherited, but does not stop the well-formed
+    /// recipe next to it from being found. `filter_by_metadata` also skips
+    /// (rather than aborts on) any file it can't turn into a `RecipeEntry`
+    /// at all, e.g. a genuine I/O error, which is the scenario this
+    /// behavior most matters for.
+    #[test]
+    fn filter_by_metadata_does_not_abort_on_a_file_with_unparsable_frontmatter() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        create_test_recipe(&dir, "broken", "---\ninvalid: yaml: content:\n---\n\nBody");
+        create_test_recipe(&dir, "fine", "---\ncuisine: Korean\n---\n\nBody");
+
+        let filter =
+            MetadataFilter::from_json(r#"{"where": {"cuisine": {"equals": "Korean"}}}"#).unwrap();
+        let results = filter_by_metadata(&dir, &filter).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name().as_ref().unwrap(), "fine");
+
+        // And the broken file is simply excluded (empty metadata), not an
+        // error that stops the listing.
+        let everything = filter_by_metadata(&dir, &MetadataFilter::default()).unwrap();
+        assert_eq!(everything.len(), 2);
+    }
+
+    /// A genuinely unreadable file (as opposed to one with merely malformed
+    /// YAML) is the case `filter_by_metadata`'s skip-on-error behavior is
+    /// really for. Gated to Unix because Windows ACLs don't map onto a
+    /// simple chmod, and skipped when running as root (root routinely
+    /// bypasses the permission bits this test relies on), since neither can
+    /// demonstrate the behavior this test is checking.
+    #[cfg(unix)]
+    #[test]
+    fn filter_by_metadata_skips_rather_than_aborts_on_an_unreadable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let unreadable =
+            create_test_recipe(&dir, "unreadable", "---\ncuisine: Korean\n---\n\nBody");
+        create_test_recipe(&dir, "fine", "---\ncuisine: Korean\n---\n\nBody");
+
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&unreadable).is_ok() {
+            // Running as a user (e.g. root) that ignores permission bits;
+            // this test can't demonstrate anything on this machine.
+            fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
+            return;
+        }
+
+        let filter =
+            MetadataFilter::from_json(r#"{"where": {"cuisine": {"equals": "Korean"}}}"#).unwrap();
+        let results = filter_by_metadata(&dir, &filter).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name().as_ref().unwrap(), "fine");
+
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    #[test]
+    fn search_with_filter_with_a_blank_query_is_filter_by_metadata() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        create_test_recipe(&dir, "kimchi_stew", "---\ncuisine: Korean\n---\n\nBody");
+        create_test_recipe(&dir, "ramen", "---\ncuisine: Japanese\n---\n\nBody");
+
+        let filter =
+            MetadataFilter::from_json(r#"{"where": {"cuisine": {"equals": "Korean"}}}"#).unwrap();
+
+        let via_blank_query = search_with_filter(&dir, "   ", &filter).unwrap();
+        let via_filter_only = filter_by_metadata(&dir, &filter).unwrap();
+
+        let names = |entries: &[RecipeEntry]| -> Vec<String> {
+            entries.iter().map(|e| e.name().clone().unwrap()).collect()
+        };
+        assert_eq!(names(&via_blank_query), names(&via_filter_only));
+    }
+
+    #[test]
+    fn search_with_filter_preserves_searchs_relevance_order() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        // "syrup" scores both recipes equally by content (one occurrence
+        // each) and neither by filename, so `search`'s tie-break — sort by
+        // file stem — decides the order: "pancakes" before "waffles".
+        create_test_recipe(
+            &dir,
+            "waffles",
+            "---\ncuisine: American\n---\n\nCrispy @waffles with @syrup",
+        );
+        create_test_recipe(
+            &dir,
+            "pancakes",
+            "---\ncuisine: American\n---\n\nServe with @maple syrup{}",
+        );
+
+        let filter =
+            MetadataFilter::from_json(r#"{"where": {"cuisine": {"equals": "American"}}}"#).unwrap();
+
+        let filtered = search_with_filter(&dir, "syrup", &filter).unwrap();
+        let unfiltered = search(&dir, "syrup").unwrap();
+
+        let names = |entries: &[RecipeEntry]| -> Vec<String> {
+            entries.iter().map(|e| e.name().clone().unwrap()).collect()
+        };
+        assert_eq!(names(&filtered), names(&unfiltered));
+        assert_eq!(
+            names(&filtered),
+            vec!["pancakes".to_string(), "waffles".to_string()]
+        );
+    }
+
+    #[test]
+    fn search_with_filter_drops_results_the_filter_rejects() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        create_test_recipe(
+            &dir,
+            "pancakes",
+            "---\ncuisine: American\n---\n\nServe with syrup",
+        );
+        create_test_recipe(
+            &dir,
+            "waffles",
+            "---\ncuisine: Belgian\n---\n\nServe with syrup",
+        );
+
+        let filter =
+            MetadataFilter::from_json(r#"{"where": {"cuisine": {"equals": "American"}}}"#).unwrap();
+        let results = search_with_filter(&dir, "syrup", &filter).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name().as_ref().unwrap(), "pancakes");
+    }
+
+    /// The most direct proof that `filter_by_metadata` reads only
+    /// frontmatter: the recipe file here is a FIFO whose writer sends a
+    /// valid, closed frontmatter block and then blocks forever, sending
+    /// neither an end-of-file nor a single further byte. `RecipeEntry`'s
+    /// frontmatter reader (`lines_lossy`, see `model::lossy`) is lazy line
+    /// by line and stops at the closing `---`; if `filter_by_metadata` ever
+    /// started reading a recipe's body, this call would block on the pipe
+    /// and the `recv_timeout` below would fail the test instead of the call
+    /// returning promptly with the one recipe found.
+    #[cfg(unix)]
+    #[test]
+    fn filter_by_metadata_does_not_read_past_the_frontmatter() {
+        use std::io::Write;
+        use std::process::Command;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let temp_dir = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let fifo_path = dir.join("blocked.cook");
+
+        let status = Command::new("mkfifo")
+            .arg(fifo_path.as_str())
+            .status()
+            .expect("mkfifo must be available to run this test");
+        assert!(status.success(), "mkfifo failed to create the test FIFO");
+
+        let writer_path = fifo_path.clone();
+        let _writer = std::thread::spawn(move || {
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .open(writer_path)
+                .expect("opening the FIFO for writing");
+            f.write_all(b"---\ntitle: Blocked Recipe\n---\n\n")
+                .expect("writing the frontmatter");
+            f.flush().expect("flushing the frontmatter");
+            // Deliberately never write more, and never close: a reader that
+            // tries to read past the frontmatter blocks here indefinitely.
+            // The test process exits (killing this thread) once the
+            // assertions below are done, so this never actually waits out
+            // the sleep.
+            std::thread::sleep(Duration::from_secs(600));
+        });
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = filter_by_metadata(&dir, &MetadataFilter::default());
+            let _ = tx.send(result);
+        });
+
+        let result = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("filter_by_metadata blocked, so it read past the frontmatter");
+        let entries = result.unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].metadata().title(), Some("Blocked Recipe"));
     }
 }

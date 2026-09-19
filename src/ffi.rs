@@ -6,7 +6,10 @@
 use crate::fetcher::{get_recipe_str, FetchError};
 use crate::menu::{list_menus_for_date as list_menus_for_date_internal, MenuError};
 use crate::model::{Metadata, RecipeEntry, RecipeEntryError, StepImageCollection};
-use crate::search::{search as search_internal, SearchError};
+use crate::search::{
+    search as search_internal, search_with_filter as search_with_filter_internal, MetadataFilter,
+    SearchError,
+};
 use crate::tree::{build_tree as build_tree_internal, RecipeTree, TreeError};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::sync::Arc;
@@ -462,6 +465,44 @@ pub fn search(base_dir: String, query: String) -> Result<Vec<Arc<FfiRecipeEntry>
         .collect())
 }
 
+/// Searches for recipes matching a query string, keeping only those whose
+/// frontmatter also satisfies a metadata filter.
+///
+/// This is the FFI entry point for the metadata-only search API: rather than
+/// exposing the filter grammar as a set of FFI types (which would need to be
+/// kept in lockstep across every platform binding), it takes the filter as
+/// the same JSON string documented on [`crate::MetadataFilter`] — e.g.
+/// `{"where": {"source": {"contains": "koreanbapsang"}}}`. An empty
+/// `query` behaves like a pure metadata filter (see
+/// [`crate::filter_by_metadata`]): nothing but frontmatter is read, and no
+/// relevance scoring is performed.
+///
+/// # Arguments
+/// * `base_dir` - Root directory to search in
+/// * `query` - Search query (can be empty for a metadata-only filter)
+/// * `filter_json` - The metadata filter, as JSON (see [`crate::MetadataFilter`])
+///
+/// # Returns
+/// List of matching recipes, in `search`'s relevance order if `query` is
+/// non-empty, or sorted by path otherwise. An invalid `filter_json` is
+/// reported as `CooklangError::ParseError`.
+#[uniffi::export]
+pub fn search_with_metadata_filter(
+    base_dir: String,
+    query: String,
+    filter_json: String,
+) -> Result<Vec<Arc<FfiRecipeEntry>>, CooklangError> {
+    let filter =
+        MetadataFilter::from_json(&filter_json).map_err(|e| CooklangError::ParseError {
+            reason: format!("Invalid metadata filter JSON: {e}"),
+        })?;
+    let results = search_with_filter_internal(Utf8Path::new(&base_dir), &query, &filter)?;
+    Ok(results
+        .into_iter()
+        .map(|r| Arc::new(FfiRecipeEntry::new(r)))
+        .collect())
+}
+
 /// Lists menu files that have a section header containing the given date.
 ///
 /// Only `.menu` files are scanned; a file is included if any of its section
@@ -569,6 +610,71 @@ mod tests {
         let results = search(temp_path.to_string(), "pancakes".to_string()).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name(), Some("Fluffy Pancakes".to_string()));
+    }
+
+    #[test]
+    fn test_search_with_metadata_filter() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+
+        create_test_recipe(
+            temp_path,
+            "kimchi_stew",
+            indoc! {r#"
+            ---
+            title: Kimchi Stew
+            cuisine: Korean
+            ---
+
+            Simmer @kimchi{200%g}"#},
+        );
+
+        create_test_recipe(
+            temp_path,
+            "ramen",
+            indoc! {r#"
+            ---
+            title: Ramen
+            cuisine: Japanese
+            ---
+
+            Simmer @kimchi{200%g}"#},
+        );
+
+        // A blank query is metadata-only: content ("kimchi") is shared by
+        // both recipes, but only one satisfies the filter.
+        let results = search_with_metadata_filter(
+            temp_path.to_string(),
+            "".to_string(),
+            r#"{"where": {"cuisine": {"equals": "Korean"}}}"#.to_string(),
+        )
+        .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name(), Some("Kimchi Stew".to_string()));
+
+        // A non-blank query still scores by content/filename, filtered by
+        // metadata on top.
+        let results = search_with_metadata_filter(
+            temp_path.to_string(),
+            "kimchi".to_string(),
+            r#"{"where": {"cuisine": {"equals": "Japanese"}}}"#.to_string(),
+        )
+        .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name(), Some("Ramen".to_string()));
+    }
+
+    #[test]
+    fn test_search_with_metadata_filter_reports_bad_filter_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+
+        let result = search_with_metadata_filter(
+            temp_path.to_string(),
+            "".to_string(),
+            "not json".to_string(),
+        );
+        assert!(matches!(result, Err(CooklangError::ParseError { .. })));
     }
 
     #[test]

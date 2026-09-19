@@ -58,6 +58,63 @@ match get_recipe(recipe_dirs, Path::new("pancakes")) {
 }
 ```
 
+### Filter by Metadata
+
+`filter_by_metadata` and `search_with_filter` answer "which recipes have
+metadata X" — e.g. "source contains koreanbapsang", "tags lacks Korean",
+"cuisine equals Japanese" — **without reading recipe bodies**. This makes
+them cheap to run over large collections, e.g. from an AI assistant that
+would otherwise have to read every recipe file to answer a metadata
+question.
+
+A `MetadataFilter` is built from a small JSON grammar (`where` conditions
+are ANDed together):
+
+```rust
+use cooklang_find::{filter_by_metadata, search_with_filter, MetadataFilter};
+use camino::Utf8Path;
+
+let filter = MetadataFilter::from_json(r#"{
+    "where": {
+        "source": { "contains": "koreanbapsang" },
+        "tags": { "missing": "vegetarian" },
+        "cuisine": { "equals": "Korean" }
+    },
+    "titleContains": "kimchi"
+}"#).expect("valid filter JSON");
+
+// Metadata only, no query: reads only frontmatter.
+match filter_by_metadata(Utf8Path::new("~/recipes"), &filter) {
+    Ok(recipes) => println!("Found {} recipes", recipes.len()),
+    Err(e) => eprintln!("Error: {}", e),
+}
+
+// Combine with a full-text query; recipe bodies are read only because a
+// query was given, same as plain `search`.
+match search_with_filter(Utf8Path::new("~/recipes"), "stew", &filter) {
+    Ok(recipes) => println!("Found {} recipes", recipes.len()),
+    Err(e) => eprintln!("Error: {}", e),
+}
+```
+
+Each condition names one operator:
+
+| Operator | Meaning |
+|----------|---------|
+| `{ "contains": "x" }` / `{ "contains": ["x", "y"] }` | Case-insensitive substring match; true if *any* needle matches *any* candidate string of the value |
+| `{ "equals": "x" }` | Case-insensitive whole-string equality against any candidate string |
+| `{ "has": "x" }` | The value (an array, or comma-separated string, the way `Metadata::tags()` already reads tags) contains `x`, case-insensitively |
+| `{ "missing": "x" }` | The inverse of `has`; also true when the key is absent |
+| `{ "exists": true \| false }` | Whether the key is present at all |
+
+A key may be dotted (`"source.url"`) to address a value nested inside a
+YAML mapping, and both keys and string comparisons are case-insensitive.
+For a mapping value like `source: { name: .., url: .. }`, a condition on
+the bare key `source` searches every value in the mapping — so
+`{"source": {"contains": "koreanbapsang"}}` matches both
+`source: https://koreanbapsang.com/x` and
+`source: { name: .., url: https://koreanbapsang.com/x }`.
+
 ### Building a Recipe Tree
 
 ```rust
@@ -119,6 +176,8 @@ Add @salt{1%tsp} to taste.
 - Case-insensitive matching
 - Support for multiple search directories
 - Priority-based search (first directory match wins)
+- Metadata-only filtering (`filter_by_metadata`, `search_with_filter`) that
+  never reads recipe bodies unless a text query is also given
 
 ### Recipe Tree
 - Build hierarchical structure of recipes

@@ -253,6 +253,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | `recipeFromContent(content, name)` | Create a recipe from string content |
 | `recipeFromPath(path)` | Create a recipe from a file path |
 | `search(baseDir, query)` | Search for recipes matching a query |
+| `searchWithMetadataFilter(baseDir, query, filterJson)` | Search matching a query, keeping only recipes whose frontmatter satisfies a metadata filter (JSON grammar; empty `query` is a pure, frontmatter-only filter) |
 | `buildTree(baseDir)` | Build a hierarchical tree of recipes |
 | `libraryVersion()` | Get the library version string |
 

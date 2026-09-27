@@ -58,6 +58,8 @@ pub mod search;
 /// Recipe tree building for directory hierarchies.
 pub mod tree;
 
+mod walk;
+
 pub use fetcher::{get_recipe, get_recipe_str};
 pub use menu::list_menus_for_date;
 pub use model::*;

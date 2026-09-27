@@ -183,7 +183,7 @@ fn walk_recipe_paths(base_dir: &Utf8Path) -> Result<Vec<Utf8PathBuf>, SearchErro
     ];
 
     for pattern in patterns {
-        for entry in glob::glob(&pattern)? {
+        for entry in crate::walk::glob_visible(&pattern)? {
             let path = entry?;
             let path = Utf8PathBuf::from_path_buf(path).map_err(|_| {
                 SearchError::IoError(std::io::Error::new(
@@ -212,7 +212,7 @@ fn search_paths(base_dir: &Utf8Path, query: &str) -> Result<Vec<Utf8PathBuf>, Se
     ];
 
     for pattern in patterns {
-        for entry in glob::glob(&pattern)? {
+        for entry in crate::walk::glob_visible(&pattern)? {
             let path = entry?;
             let path = Utf8PathBuf::from_path_buf(path).map_err(|_| {
                 SearchError::IoError(std::io::Error::new(
@@ -756,5 +756,28 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].metadata().title(), Some("Blocked Recipe"));
+    }
+
+    #[test]
+    fn test_search_and_filter_skip_hidden_files_and_directories() {
+        // https://github.com/cooklang/cookcli/issues/555
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        create_test_recipe(&temp_dir_path, "pancakes", "Make @pancakes{}");
+        fs::write(
+            temp_dir_path.join("._pancakes.cook"),
+            b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X pancakes",
+        )
+        .unwrap();
+        let hidden_dir = temp_dir_path.join(".git");
+        fs::create_dir_all(&hidden_dir).unwrap();
+        create_test_recipe(&hidden_dir, "pancakes-old", "Make @pancakes{}");
+
+        let results = search(&temp_dir_path, "pancakes").unwrap();
+        let paths: Vec<_> = results.iter().map(|r| r.path().unwrap().clone()).collect();
+        assert_eq!(paths, vec![temp_dir_path.join("pancakes.cook")]);
+
+        let paths = walk_recipe_paths(&temp_dir_path).unwrap();
+        assert_eq!(paths, vec![temp_dir_path.join("pancakes.cook")]);
     }
 }

@@ -74,7 +74,7 @@ pub fn list_menus_for_date<P: AsRef<Utf8Path>>(
 
     for base_dir in base_dirs {
         let pattern = base_dir.as_ref().join("**/*.menu").to_string();
-        for entry in glob::glob(&pattern)? {
+        for entry in crate::walk::glob_visible(&pattern)? {
             let path = entry?;
             let path = Utf8PathBuf::from_path_buf(path).map_err(|_| {
                 MenuError::IoError(std::io::Error::new(
@@ -259,5 +259,19 @@ mod tests {
         let results = list_menus_for_date(&[&dir], "2026-06-24").unwrap();
 
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn skips_hidden_menu_files() {
+        // https://github.com/cooklang/cookcli/issues/555
+        let tmp = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
+        fs::write(dir.join("week.menu"), "= 2026-06-24\n@./a{}\n").unwrap();
+        fs::write(dir.join("._week.menu"), "= 2026-06-24\n@./a{}\n").unwrap();
+
+        let results = list_menus_for_date(&[&dir], "2026-06-24").unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path().unwrap(), &dir.join("week.menu"));
     }
 }

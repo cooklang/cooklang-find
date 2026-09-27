@@ -4,8 +4,8 @@
 //! that represent the organization of recipe files within a directory tree.
 
 use crate::model::{RecipeEntry, RecipeEntryError};
+use crate::walk::glob_visible;
 use camino::{Utf8Path, Utf8PathBuf};
-use glob::glob;
 use thiserror::Error;
 
 mod model;
@@ -90,7 +90,7 @@ pub fn build_tree<P: AsRef<Utf8Path>>(base_dir: P) -> Result<RecipeTree, TreeErr
     ];
 
     for pattern in patterns {
-        for entry in glob(&pattern)? {
+        for entry in glob_visible(&pattern)? {
             let path = entry?;
             let path = Utf8PathBuf::from_path_buf(path).map_err(|_| {
                 TreeError::StripPrefixError("Path contains invalid UTF-8".to_string())
@@ -401,5 +401,28 @@ mod tests {
         assert_eq!(tree.name, "test_recipe");
         assert!(tree.recipe.is_some());
         assert!(tree.children.is_empty());
+    }
+
+    #[test]
+    fn test_skips_hidden_files_and_directories() {
+        // macOS writes AppleDouble `._<name>` companions next to every file it
+        // touches on a non-HFS share; they end in `.cook` but are binary
+        // resource forks, not recipes. https://github.com/cooklang/cookcli/issues/555
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        create_test_recipe(&temp_dir_path, "pancakes", "Make @pancakes{}");
+        fs::write(
+            temp_dir_path.join("._pancakes.cook"),
+            b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X        ",
+        )
+        .unwrap();
+        let hidden_dir = temp_dir_path.join(".Trashes");
+        fs::create_dir_all(&hidden_dir).unwrap();
+        create_test_recipe(&hidden_dir, "deleted", "Make @toast{}");
+
+        let tree = build_tree(&temp_dir_path).unwrap();
+
+        let names: Vec<_> = tree.children.keys().cloned().collect();
+        assert_eq!(names, vec!["pancakes".to_string()]);
     }
 }

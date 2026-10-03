@@ -85,20 +85,23 @@ impl<'a> MealHeader<'a> {
     fn parse(line: &'a str) -> Option<Self> {
         static RE: OnceLock<Regex> = OnceLock::new();
         let re = RE.get_or_init(|| {
-            Regex::new(r"^([^@:()]+?)\s*(?:\((\d{1,2}:\d{2})\))?\s*:(?:\s|$)").unwrap()
+            Regex::new(r"^([^@:]+?)\s*(?:\((\d{1,2}:\d{2})\))?\s*:(?:\s|$)").unwrap()
         });
         if line.starts_with("--") {
             return None;
         }
         let caps = re.captures(line)?;
         let meal_type = caps[1].trim();
-        if meal_type.is_empty() {
+        let rest = &line[caps[0].len()..];
+        // `Tip: prep ahead` is text; a heading is followed by nothing or items.
+        let after = rest.trim_start();
+        if meal_type.is_empty() || !(after.is_empty() || after.starts_with('@')) {
             return None;
         }
         Some(MealHeader {
             meal_type: meal_type.to_string(),
             time: caps.get(2).map(|m| m.as_str().to_string()),
-            rest: &line[caps[0].len()..],
+            rest,
         })
     }
 }
@@ -114,7 +117,8 @@ struct Builder {
 impl Builder {
     fn line(&mut self, raw: &str) {
         let trimmed = raw.trim();
-        if trimmed.is_empty() {
+        // Blank lines, `---` rules, and deprecated `>>` metadata carry no items.
+        if trimmed.is_empty() || is_rule(trimmed) || trimmed.starts_with(">>") {
             return;
         }
         if trimmed.starts_with('=') {
@@ -180,12 +184,18 @@ impl Builder {
     }
 }
 
-/// Removes a leading `- ` list bullet, leaving `--` comments intact.
+/// True for a line of three or more dashes, such as `---`.
+fn is_rule(line: &str) -> bool {
+    line.len() >= 3 && line.bytes().all(|b| b == b'-')
+}
+
+/// Removes a leading `- ` list bullet. A `-` must be followed by whitespace
+/// or end the line, so `-5 degrees` and `--` comments are left intact.
 fn strip_bullet(line: &str) -> &str {
-    if line.starts_with("--") {
-        return line;
+    match line.strip_prefix('-') {
+        Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => rest.trim_start(),
+        _ => line,
     }
-    line.strip_prefix('-').map_or(line, str::trim_start)
 }
 
 /// Appends the items found in `text` (one line, bullet and `\` already
@@ -745,6 +755,92 @@ mod tests {
                 ),
                 meal(Some("Lunch"), None, vec![ingredient("soup", None, None)]),
             ]
+        );
+    }
+
+    #[test]
+    fn meal_header_time_still_parsed() {
+        let header = MealHeader::parse("Breakfast (08:30):").unwrap();
+
+        assert_eq!(header.meal_type, "Breakfast");
+        assert_eq!(header.time.as_deref(), Some("08:30"));
+    }
+
+    #[test]
+    fn meal_header_keeps_non_time_parentheses() {
+        let menu = Menu::parse("= Day 1\nLunch (packed):\n- @./Wrap{}\n", "m");
+
+        assert_eq!(
+            menu.sections[0].meals,
+            vec![meal(
+                Some("Lunch (packed)"),
+                None,
+                vec![reference("Wrap", None, None)]
+            )]
+        );
+    }
+
+    #[test]
+    fn label_followed_by_text_is_not_a_header() {
+        let menu = Menu::parse(
+            "= Day 1\nDinner:\n- @./Stew{}\nTip: prep the night before\n",
+            "m",
+        );
+
+        assert_eq!(
+            menu.sections[0].meals,
+            vec![meal(
+                Some("Dinner"),
+                None,
+                vec![
+                    reference("Stew", None, None),
+                    MenuItem::LineBreak,
+                    text("Tip: prep the night before"),
+                ]
+            )]
+        );
+    }
+
+    #[test]
+    fn dash_without_space_is_not_a_bullet() {
+        let menu = Menu::parse("= Day 1\n-5 degrees\n- @eggs{}\n-\n", "m");
+
+        assert_eq!(
+            menu.sections[0].meals,
+            vec![meal(
+                None,
+                None,
+                vec![
+                    text("-5 degrees"),
+                    MenuItem::LineBreak,
+                    ingredient("eggs", None, None),
+                ]
+            )]
+        );
+    }
+
+    #[test]
+    fn dash_rule_lines_are_skipped() {
+        let menu = Menu::parse("= Day 1\nDinner:\n- @./Stew{}\n---\n-----\n", "m");
+
+        assert_eq!(
+            menu.sections[0].meals,
+            vec![meal(
+                Some("Dinner"),
+                None,
+                vec![reference("Stew", None, None)]
+            )]
+        );
+    }
+
+    #[test]
+    fn legacy_metadata_lines_are_skipped() {
+        let menu = Menu::parse(">> servings: 2\n= Day 1\n>> note: x\n@./Stew{}\n", "m");
+
+        assert_eq!(menu.sections.len(), 1);
+        assert_eq!(
+            menu.sections[0].meals,
+            vec![meal(None, None, vec![reference("Stew", None, None)])]
         );
     }
 }

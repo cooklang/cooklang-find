@@ -1,12 +1,18 @@
-//! Menu discovery by date.
+//! Menu files: discovery by date and structured parsing.
 //!
-//! This module finds Cooklang `.menu` files that are "active" on a given date.
-//! A menu file is active for a date when one of its section headers contains
-//! that date string (for example, a section `= 2026-06-24 Dinner` makes the
-//! file active for `2026-06-24`).
+//! [`list_menus_for_date`] finds `.menu` files that are "active" on a given
+//! date. A menu file is active for a date when one of its section headers
+//! contains that date string (for example, a section `= 2026-06-24 Dinner`
+//! makes the file active for `2026-06-24`).
+//!
+//! [`Menu`] is the structured form of a menu: sections, meals, and items.
 //!
 //! The library performs no date parsing or timezone handling: the caller
 //! supplies the date as an opaque string that is matched literally.
+
+mod model;
+
+pub use model::{Menu, MenuItem, MenuMeal, MenuSection};
 
 use crate::model::lossy::read_to_string_lossy;
 use crate::model::RecipeEntry;

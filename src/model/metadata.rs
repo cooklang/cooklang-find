@@ -24,7 +24,7 @@ use std::collections::HashMap;
 ///     println!("Cuisine: {:?}", cuisine);
 /// }
 /// ```
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct Metadata {
     #[serde(flatten)]
     pub(super) data: HashMap<String, Value>,

@@ -107,8 +107,9 @@ extraction. Parsing never fails; unrecognised content becomes `Text`.
 4. Meal header: line (bullet-less, trailing `\` ignored, not starting with
    `--`) matching `^([^@:]+?)\s*(\((HH:MM)\))?\s*:` followed by
    whitespace or end of line (so `2:30` and `https://` don't count), where
-   the rest of the line is empty or starts with `@` (so `Tip: prep ahead`
-   stays `Text`). Starts a new `MenuMeal`; `(HH:MM)` is extracted into
+   the rest of the line is empty, starts with `@`, or starts with `--` (so
+   `Tip: prep ahead` stays `Text`, while `Dinner: -- eating out` starts a
+   "Dinner" meal whose first item is `Note`). Starts a new `MenuMeal`; `(HH:MM)` is extracted into
    `time`, other parentheses stay in the name (`Lunch (packed)`). Items after
    the `:` belong to the new meal (`Breakfast: @eggs{}`).
 5. Other lines: tokenise into items. A leading `-` bullet is dropped only

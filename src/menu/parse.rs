@@ -103,9 +103,11 @@ impl<'a> MealHeader<'a> {
         let caps = re.captures(line)?;
         let meal_type = caps[1].trim();
         let rest = &line[caps[0].len()..];
-        // `Tip: prep ahead` is text; a heading is followed by nothing or items.
+        // `Tip: prep ahead` is text; a heading is followed by nothing, items,
+        // or a `--` note.
         let after = rest.trim_start();
-        if meal_type.is_empty() || !(after.is_empty() || after.starts_with('@')) {
+        let heading_follows = after.is_empty() || after.starts_with('@') || after.starts_with("--");
+        if meal_type.is_empty() || !heading_follows {
             return None;
         }
         Some(MealHeader {
@@ -1009,6 +1011,35 @@ mod tests {
 
         assert_eq!(menu.name, "Week");
         assert_eq!(menu.sections[0].name.as_deref(), Some("Day 1"));
+    }
+
+    #[test]
+    fn meal_header_followed_by_note() {
+        let menu = Menu::parse(
+            indoc! {"
+                Lunch:
+                @./Salad{}
+                Dinner: -- eating out
+                @./Pie{}
+            "},
+            "m",
+        );
+
+        assert_eq!(
+            menu.sections[0].meals,
+            vec![
+                meal(Some("Lunch"), None, vec![reference("Salad", None, None)]),
+                meal(
+                    Some("Dinner"),
+                    None,
+                    vec![
+                        note("eating out"),
+                        MenuItem::LineBreak,
+                        reference("Pie", None, None),
+                    ]
+                ),
+            ]
+        );
     }
 
     #[test]

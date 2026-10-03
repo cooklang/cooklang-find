@@ -42,12 +42,7 @@ pub enum MenuError {
 /// whitespace (handles both `= Name` and `== Name ==` forms). The `date` is
 /// matched as a literal substring of that name.
 fn section_header_contains_date(line: &str, date: &str) -> bool {
-    let trimmed = line.trim();
-    if !trimmed.starts_with('=') {
-        return false;
-    }
-    let name = trimmed.trim_matches('=').trim();
-    name.contains(date)
+    parse::section_name(line).is_some_and(|name| name.contains(date))
 }
 
 /// Returns all `.menu` files under `base_dirs` that have a section header

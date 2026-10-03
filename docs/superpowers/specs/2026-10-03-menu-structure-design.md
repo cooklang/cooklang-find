@@ -76,6 +76,9 @@ pub enum MenuItem {
     Text { text: String },
     /// `-- comment`, on its own line or at the end of one.
     Note { text: String },
+    /// Separates items from different lines of the same meal; serialized as
+    /// `{"kind":"line_break"}`. Never a meal's first or last item.
+    LineBreak,
 }
 ```
 
@@ -94,31 +97,38 @@ Differences from CookCLI's API shape, intentional:
 no `cooklang` dependency, consistent with `menu/mod.rs` and metadata
 extraction. Parsing never fails; unrecognised content becomes `Text`.
 
-1. Strip YAML frontmatter and parse it with `Metadata`.
+1. Strip a leading BOM (`\u{feff}`), then YAML frontmatter, parsed with
+   `Metadata`. Blank lines, `---` rules (3+ dashes), and deprecated `>>`
+   metadata lines are skipped.
 2. Section header: trimmed line starting with `=`; name = trim `=` and
-   whitespace. Starts a new `MenuSection`. Content before the first header
+   whitespace (`section_name`, shared with `list_menus_for_date`). Starts a new `MenuSection`. Content before the first header
    goes into a section with `name: None` (omitted if empty).
 3. Note: trimmed line starting with `--` → `Note` in the current meal.
 4. Meal header: line (bullet-less, trailing `\` ignored, not starting with
-   `--`) matching `^([^@:()]+?)\s*(\((HH:MM)\))?\s*:` followed by
-   whitespace or end of line (so `2:30` and `https://` don't count). Starts a new `MenuMeal`; `(HH:MM)` is
-   extracted into `time`. Anything after the `:` on the same line is scanned
-   as items of the new meal (`Breakfast: @eggs{}`).
-5. Other lines: tokenise into items. Leading `- ` bullets and trailing `\`
-   are dropped.
+   `--`) matching `^([^@:]+?)\s*(\((HH:MM)\))?\s*:` followed by
+   whitespace or end of line (so `2:30` and `https://` don't count), where
+   the rest of the line is empty or starts with `@` (so `Tip: prep ahead`
+   stays `Text`). Starts a new `MenuMeal`; `(HH:MM)` is extracted into
+   `time`, other parentheses stay in the name (`Lunch (packed)`). Items after
+   the `:` belong to the new meal (`Breakfast: @eggs{}`).
+5. Other lines: tokenise into items. A leading `-` bullet is dropped only
+   when followed by whitespace or end of line (`-5 degrees` is text); a
+   trailing `\` is dropped. When a line adds items to a meal that already has
+   some, a `LineBreak` is inserted first.
    - `@name{qty%unit}` / `@name{}` — name may contain spaces when braces
-     follow; `@name` without braces ends at the first whitespace or
-     punctuation. Trailing `(note)` after an ingredient is ignored.
+     follow; `@name` without braces ends at the first whitespace,
+     punctuation, or `@`. An empty name (`@./.cook{}`) leaves the text as
+     `Text`. Trailing `(note)` after an ingredient is ignored.
    - Name starting with `./` or `../` → `RecipeReference` (strip `./`,
-     strip `.cook`). Otherwise → `Ingredient`. Leading modifiers
-     (`?`, `+`, `-`, `&`) are ignored.
+     strip `.cook`). Otherwise → `Ingredient`. One leading modifier
+     (`?`, `+`, `-`, `&`) is ignored.
    - `--` outside a component starts a `Note` for the rest of the line.
    - Remaining text between items → `Text` (skipped when blank).
 6. Meals with no items are dropped; sections are kept even if empty so day
    lists stay complete.
 7. Block comments `[- … -]` are removed before scanning.
 
-Date regex: `\d{4}-\d{2}-\d{2}`, first match. This is consistent with
+Date regex: `\d{4}-\d{2}-\d{2}` not adjacent to other digits, first match. This is consistent with
 `list_menus_for_date`'s substring match, so a menu found for a date always
 has a section with that `date` (for ISO dates).
 

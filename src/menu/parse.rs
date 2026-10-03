@@ -21,6 +21,7 @@ impl Menu {
     /// assert_eq!(menu.dates(), vec!["2026-03-09"]);
     /// ```
     pub fn parse(content: &str, fallback_name: &str) -> Menu {
+        let content = content.strip_prefix('\u{feff}').unwrap_or(content);
         let (metadata, body) = split_frontmatter(content);
         let body = strip_block_comments(body);
         let name = metadata
@@ -67,11 +68,20 @@ fn strip_block_comments(body: &str) -> std::borrow::Cow<'_, str> {
         .replace_all(body, "")
 }
 
+/// Returns the name of a `= Name` / `== Name ==` section header, with the
+/// `=` markers and surrounding whitespace trimmed; `None` for other lines.
+pub(super) fn section_name(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    trimmed
+        .starts_with('=')
+        .then(|| trimmed.trim_matches('=').trim())
+}
+
 fn extract_date(header: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\d{4}-\d{2}-\d{2}").unwrap())
-        .find(header)
-        .map(|m| m.as_str().to_string())
+    RE.get_or_init(|| Regex::new(r"(?:^|\D)(\d{4}-\d{2}-\d{2})(?:\D|$)").unwrap())
+        .captures(header)
+        .map(|caps| caps[1].to_string())
 }
 
 /// A `Breakfast (08:30):` heading and whatever follows it on the line.
@@ -121,8 +131,8 @@ impl Builder {
         if trimmed.is_empty() || is_rule(trimmed) || trimmed.starts_with(">>") {
             return;
         }
-        if trimmed.starts_with('=') {
-            self.start_section(trimmed.trim_matches('=').trim());
+        if let Some(name) = section_name(trimmed) {
+            self.start_section(name);
             return;
         }
 
@@ -248,7 +258,7 @@ fn push_text(text: &str, items: &mut Vec<MenuItem>) {
 /// Parses the component after an `@`, returning it and the bytes consumed.
 fn parse_component(s: &str) -> Option<(MenuItem, usize)> {
     // Modifiers (`@?`, `@+`, `@-`, `@&`) don't change what is listed.
-    let body = s.trim_start_matches(['?', '+', '-', '&']);
+    let body = s.strip_prefix(['?', '+', '-', '&']).unwrap_or(s);
     let modifiers = s.len() - body.len();
 
     let (name, amount, len) = match braced(body) {
@@ -272,7 +282,9 @@ fn parse_component(s: &str) -> Option<(MenuItem, usize)> {
 
     let (quantity, unit) = split_amount(amount);
     let item = if name.starts_with("./") || name.starts_with("../") {
-        recipe_reference(name, quantity, unit)
+        recipe_reference(name, quantity, unit)?
+    } else if name.is_empty() {
+        return None;
     } else {
         MenuItem::Ingredient {
             name: name.to_string(),
@@ -303,7 +315,7 @@ fn braced(body: &str) -> Option<(&str, &str, usize)> {
 /// Length of an unbraced, single-word name.
 fn single_word_len(body: &str) -> usize {
     let end = body
-        .find(|c: char| c.is_whitespace() || ",;:!?(){}".contains(c))
+        .find(|c: char| c.is_whitespace() || ",;:!?(){}@".contains(c))
         .unwrap_or(body.len());
     body[..end].trim_end_matches('.').len()
 }
@@ -325,21 +337,32 @@ fn non_blank(s: &str) -> Option<String> {
     (!s.is_empty()).then(|| s.to_string())
 }
 
-fn recipe_reference(name: &str, quantity: Option<String>, unit: Option<String>) -> MenuItem {
+/// Builds a reference from `./Path/Name.cook`; `None` if the name is empty.
+fn recipe_reference(
+    name: &str,
+    quantity: Option<String>,
+    unit: Option<String>,
+) -> Option<MenuItem> {
     let path = name.strip_prefix("./").unwrap_or(name);
     let path = path.strip_suffix(".cook").unwrap_or(path);
-    MenuItem::RecipeReference {
-        name: path.rsplit('/').next().unwrap_or(path).to_string(),
+    let name = path.rsplit('/').next().unwrap_or(path);
+    if name.is_empty() {
+        return None;
+    }
+    Some(MenuItem::RecipeReference {
+        name: name.to_string(),
         path: path.to_string(),
         quantity,
         unit,
         scale: None,
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::{Menu, MenuMeal, MenuSection};
     use super::*;
+    use indoc::indoc;
 
     fn scan(text: &str) -> Vec<MenuItem> {
         let mut items = Vec::new();
@@ -504,9 +527,6 @@ mod tests {
     fn blank_text_is_dropped() {
         assert_eq!(scan("   "), vec![]);
     }
-
-    use super::super::model::{Menu, MenuMeal, MenuSection};
-    use indoc::indoc;
 
     fn meal(meal_type: Option<&str>, time: Option<&str>, items: Vec<MenuItem>) -> MenuMeal {
         MenuMeal {
@@ -842,5 +862,162 @@ mod tests {
             menu.sections[0].meals,
             vec![meal(None, None, vec![reference("Stew", None, None)])]
         );
+    }
+
+    #[test]
+    fn parses_three_day_plan() {
+        // cook.md Plans/3 Day Plan IX.menu, Day 1 trimmed.
+        let content = indoc! {"
+            ---
+            servings: 2
+            ---
+
+            ==Day 1==
+
+            Breakfast:
+            - @./Breakfast/Shakshuka.cook{2}
+            - @crusty bread{4%slices}
+            - @filter coffee{1%cup} and @tea{1%cup}
+
+            Lunch:
+            - @./Lunches/Spaghetti carbonara.cook{2}
+            - @./Salads/Caprese.cook{2}
+        "};
+
+        let menu = Menu::parse(content, "3 Day Plan IX");
+
+        assert_eq!(
+            menu.sections,
+            vec![MenuSection {
+                name: Some("Day 1".to_string()),
+                date: None,
+                meals: vec![
+                    meal(
+                        Some("Breakfast"),
+                        None,
+                        vec![
+                            reference("Breakfast/Shakshuka", Some("2"), None),
+                            MenuItem::LineBreak,
+                            ingredient("crusty bread", Some("4"), Some("slices")),
+                            MenuItem::LineBreak,
+                            ingredient("filter coffee", Some("1"), Some("cup")),
+                            text(" and "),
+                            ingredient("tea", Some("1"), Some("cup")),
+                        ]
+                    ),
+                    meal(
+                        Some("Lunch"),
+                        None,
+                        vec![
+                            reference("Lunches/Spaghetti carbonara", Some("2"), None),
+                            MenuItem::LineBreak,
+                            reference("Salads/Caprese", Some("2"), None),
+                        ]
+                    ),
+                ],
+            }]
+        );
+    }
+
+    #[test]
+    fn utf8_ingredient_names() {
+        assert_eq!(
+            scan("@crème fraîche{2%tbsp} et @café{}"),
+            vec![
+                ingredient("crème fraîche", Some("2"), Some("tbsp")),
+                text(" et "),
+                ingredient("café", None, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn crlf_line_endings() {
+        let menu = Menu::parse(
+            "---\r\nservings: 2\r\n---\r\n= Day 1\r\nDinner:\r\n- @./Stew{}\r\n- @bread{}\r\n",
+            "m",
+        );
+
+        assert_eq!(menu.metadata.servings(), Some(2));
+        assert_eq!(menu.sections[0].name.as_deref(), Some("Day 1"));
+        assert_eq!(
+            menu.sections[0].meals,
+            vec![meal(
+                Some("Dinner"),
+                None,
+                vec![
+                    reference("Stew", None, None),
+                    MenuItem::LineBreak,
+                    ingredient("bread", None, None),
+                ]
+            )]
+        );
+    }
+
+    #[test]
+    fn unclosed_brace_falls_back_to_single_word() {
+        assert_eq!(
+            scan("@salt{ and pepper"),
+            vec![ingredient("salt", None, None), text("{ and pepper")]
+        );
+    }
+
+    #[test]
+    fn reference_amounts_with_unit_and_fraction() {
+        assert_eq!(
+            scan("@./Drinks/Lemonade{500%ml}"),
+            vec![reference("Drinks/Lemonade", Some("500"), Some("ml"))]
+        );
+        assert_eq!(
+            scan("@./Pie{1/2}"),
+            vec![reference("Pie", Some("1/2"), None)]
+        );
+    }
+
+    #[test]
+    fn unbraced_name_stops_at_at_sign() {
+        assert_eq!(
+            scan("@a@b{}"),
+            vec![ingredient("a", None, None), ingredient("b", None, None)]
+        );
+    }
+
+    #[test]
+    fn only_one_modifier_is_stripped() {
+        assert_eq!(scan("@??x{}"), vec![ingredient("?x", None, None)]);
+    }
+
+    #[test]
+    fn empty_reference_names_stay_text() {
+        assert_eq!(scan("@./.cook{}"), vec![text("@./.cook{}")]);
+        assert_eq!(scan("@./Breakfast/{}"), vec![text("@./Breakfast/{}")]);
+    }
+
+    #[test]
+    fn date_must_not_be_inside_longer_digit_run() {
+        assert_eq!(extract_date("= 12026-03-071"), None);
+        assert_eq!(
+            extract_date("Mon(2026-03-07)").as_deref(),
+            Some("2026-03-07")
+        );
+        assert_eq!(extract_date("2026-03-07").as_deref(), Some("2026-03-07"));
+    }
+
+    #[test]
+    fn leading_bom_is_ignored() {
+        let menu = Menu::parse("\u{feff}---\ntitle: Week\n---\n= Day 1\n@eggs{}\n", "m");
+
+        assert_eq!(menu.name, "Week");
+        assert_eq!(menu.sections[0].name.as_deref(), Some("Day 1"));
+    }
+
+    #[test]
+    fn section_name_trims_markers() {
+        assert_eq!(section_name("  == Day 1 ==  "), Some("Day 1"));
+        assert_eq!(
+            section_name("= 2026-06-24 Dinner"),
+            Some("2026-06-24 Dinner")
+        );
+        assert_eq!(section_name("Dinner:"), None);
     }
 }

@@ -234,7 +234,7 @@ fn collect_value_candidates(value: &Value, out: &mut Vec<String>) {
 
 /// Parse YAML frontmatter from raw YAML content (without --- markers)
 /// Returns None if the content is empty or invalid YAML
-pub(super) fn parse_yaml_content(yaml_content: &str) -> Option<Metadata> {
+pub(crate) fn parse_yaml_content(yaml_content: &str) -> Option<Metadata> {
     if yaml_content.trim().is_empty() {
         return None;
     }

@@ -315,6 +315,109 @@ mod tests {
         );
     }
 
+    fn write(dir: &Utf8PathBuf, file: &str, content: &str) {
+        let path = dir.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+
+    fn servings_recipe(dir: &Utf8PathBuf, file: &str, servings: &str) {
+        write(
+            dir,
+            file,
+            &format!("---\nservings: {servings}\n---\n@x{{}}\n"),
+        );
+    }
+
+    #[test]
+    fn fixed_quantity_is_still_scaled() {
+        let (_t, dir) = recipes_dir();
+        assert_eq!(resolve("@./Pancakes{=2}", &dir, 1.0), vec![Some(2.0)]);
+        assert_eq!(
+            resolve("@./Pancakes{=2%servings}", &dir, 1.0),
+            vec![Some(1.0)]
+        );
+        assert_eq!(resolve("@./Pancakes{=2}", &dir, 3.0), vec![Some(6.0)]);
+    }
+
+    #[test]
+    fn string_servings_are_parsed() {
+        let (_t, dir) = recipes_dir();
+        servings_recipe(&dir, "Stew.cook", "\"4\"");
+        assert_eq!(resolve("@./Stew{8%servings}", &dir, 1.0), vec![Some(2.0)]);
+    }
+
+    #[test]
+    fn range_servings_are_raw() {
+        let (_t, dir) = recipes_dir();
+        servings_recipe(&dir, "Stew.cook", "4-6");
+        assert_eq!(resolve("@./Stew{8%servings}", &dir, 1.0), vec![Some(8.0)]);
+    }
+
+    #[test]
+    fn decimal_servings_divide() {
+        let (_t, dir) = recipes_dir();
+        servings_recipe(&dir, "Stew.cook", "1.5");
+        assert_eq!(resolve("@./Stew{3%servings}", &dir, 1.0), vec![Some(2.0)]);
+    }
+
+    #[test]
+    fn zero_servings_are_raw() {
+        let (_t, dir) = recipes_dir();
+        servings_recipe(&dir, "Stew.cook", "0");
+        assert_eq!(resolve("@./Stew{3%servings}", &dir, 1.0), vec![Some(3.0)]);
+    }
+
+    #[test]
+    fn infinite_servings_are_raw() {
+        let (_t, dir) = recipes_dir();
+        servings_recipe(&dir, "Stew.cook", ".inf");
+        assert_eq!(resolve("@./Stew{3%servings}", &dir, 1.0), vec![Some(3.0)]);
+    }
+
+    #[test]
+    fn nested_reference_is_resolved() {
+        let (_t, dir) = recipes_dir();
+        servings_recipe(&dir, "Mains/Stew.cook", "4");
+        assert_eq!(
+            resolve("@./Mains/Stew{8%servings}", &dir, 1.0),
+            vec![Some(2.0)]
+        );
+    }
+
+    #[test]
+    fn first_base_dir_with_recipe_wins() {
+        let (_t1, empty) = recipes_dir();
+        let (_t2, first) = recipes_dir();
+        let (_t3, second) = recipes_dir();
+        servings_recipe(&first, "Stew.cook", "4");
+        servings_recipe(&second, "Stew.cook", "2");
+        let mut menu = Menu::parse("@./Stew{8%servings}", "m");
+        menu.resolve_scales(&[&empty, &first, &second], 1.0);
+        assert_eq!(scales(&menu), vec![Some(2.0)]);
+    }
+
+    #[test]
+    fn repeated_reference_gets_its_own_scale() {
+        let (_t, dir) = recipes_dir();
+        let mut menu = Menu::parse(
+            "= Mon\n- @./Pancakes{4%servings}\n= Tue\n- @./Pancakes{3}\n- @./Pancakes{}\n",
+            "m",
+        );
+        menu.resolve_scales(&[&dir], 1.0);
+        let all: Vec<_> = menu
+            .sections
+            .iter()
+            .flat_map(|section| &section.meals)
+            .flat_map(|meal| &meal.items)
+            .filter_map(|item| match item {
+                MenuItem::RecipeReference { scale, .. } => Some(*scale),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(all, vec![Some(2.0), Some(3.0), Some(1.0)]);
+    }
+
     #[test]
     fn size_is_not_looked_up_without_numeric_target_and_unit() {
         let no_lookup = || -> &RecipeSize { panic!("recipe size looked up") };

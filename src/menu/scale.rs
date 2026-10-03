@@ -19,10 +19,20 @@ impl Menu {
     /// - any other unit — target ÷ the referenced recipe's `yield` value,
     ///   when the units match (case-insensitive)
     ///
-    /// When the referenced recipe is missing or lacks the metadata, the
-    /// target is used as a raw multiplier. The result is multiplied by
-    /// `menu_scale`. Referenced recipes are looked up as `<path>.cook` in
-    /// `base_dirs`.
+    /// Targets must be Cooklang numbers: `2`, `1.5`, `1/2`, `1 1/2`, with an
+    /// optional leading `=`. A fixed target (`{=2}`) is still multiplied by
+    /// `menu_scale`, matching CookCLI.
+    ///
+    /// Fallbacks are silent: when the referenced recipe is missing or lacks
+    /// usable metadata (or the units differ), the target is used as a raw
+    /// multiplier. The result is multiplied by `menu_scale`, which the caller
+    /// must pass as a finite number greater than 0.
+    ///
+    /// Reference paths are resolved against `base_dirs` (the library root),
+    /// not the menu's own folder: `@./Mains/Stew` is looked up as
+    /// `<base_dir>/Mains/Stew.cook`, then `<base_dir>/Mains/Stew.menu`, in
+    /// each base dir in turn. A recipe is only loaded when the result depends
+    /// on it (a numeric target with a unit), at most once per call.
     pub fn resolve_scales<P: AsRef<Utf8Path>>(&mut self, base_dirs: &[P], menu_scale: f64) {
         let mut sizes: HashMap<String, RecipeSize> = HashMap::new();
         let items = self

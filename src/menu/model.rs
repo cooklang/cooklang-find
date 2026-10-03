@@ -108,6 +108,10 @@ impl Menu {
     }
 
     /// Returns recipe references, deduplicated by path, in first-seen order.
+    ///
+    /// Each path keeps its first occurrence's `quantity`, `unit`, and
+    /// `scale`; later occurrences are dropped. To use every occurrence's own
+    /// scale (e.g. to build a shopping list), iterate [`Menu::sections`].
     pub fn recipe_references(&self) -> Vec<&MenuItem> {
         let mut seen = HashSet::new();
         let mut references = Vec::new();

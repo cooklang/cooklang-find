@@ -276,7 +276,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | `listDir(dir)` | List one folder: its recipes (loaded) and subfolders (with recursive recipe counts, no files opened) |
 | `countRecipes(dir)` | Count recipes under a folder by file name, without opening them |
 | `listMenusForDate(baseDirs, date)` | Find `.menu` files with a section header containing `date` |
-| `parseMenu(path, baseDirs, scale)` | Parse a `.menu` file into days, meals, and items, resolving recipe reference scales |
+| `parseMenu(path, baseDirs, scale)` | Parse a `.menu` file into days, meals, and items, resolving recipe reference scales. References resolve against `baseDirs` (`<path>.cook`, then `<path>.menu`), not the menu's folder; `{=2}` is still multiplied by `scale`; missing recipes fall back silently to the raw quantity. Throws `MenuError` if `scale` is not finite or is `<= 0` |
 | `parseMenuContent(content, name)` | Parse menu text without resolving scales |
 | `libraryVersion()` | Get the library version string |
 
@@ -367,7 +367,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | `sections` | `List<FfiMenuSection>` | Sections (usually days) in file order |
 | `dates` | `List<String>` | Distinct section dates in file order |
 | `firstDate` / `lastDate` | `String?` | Earliest / latest section date |
-| `recipeReferences` | `List<FfiMenuItem>` | Recipe references, deduplicated by path |
+| `recipeReferences` | `List<FfiMenuItem>` | Recipe references, deduplicated by path; each keeps its first occurrence's quantity and scale. Iterate `sections` for per-occurrence scales (e.g. shopping lists) |
 
 #### FfiMenuSection
 

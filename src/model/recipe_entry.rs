@@ -333,7 +333,8 @@ impl RecipeEntry {
 
     /// Parses this entry as a [`Menu`].
     ///
-    /// Returns `None` when the entry is not a `.menu` file.
+    /// Returns `None` when the entry is not a `.menu` file, including for
+    /// content-backed entries, which are never menus.
     ///
     /// # Errors
     ///

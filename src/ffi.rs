@@ -432,7 +432,10 @@ pub struct FfiMenu {
     pub first_date: Option<String>,
     /// Latest section date
     pub last_date: Option<String>,
-    /// Recipe references, deduplicated by path, in first-seen order
+    /// Recipe references, deduplicated by path, in first-seen order.
+    ///
+    /// Each path keeps its first occurrence's quantity and scale. Iterate
+    /// `sections` for every occurrence's own scale (e.g. shopping lists).
     pub recipe_references: Vec<FfiMenuItem>,
 }
 
@@ -696,13 +699,21 @@ pub fn list_menus_for_date(
 
 /// Parses a `.menu` file and resolves its recipe reference scales.
 ///
+/// Reference paths resolve against `base_dirs` (the library root), not the
+/// menu's own folder; each is looked up as `<path>.cook`, then
+/// `<path>.menu`. A fixed quantity (`{=2}`) is still multiplied by `scale`,
+/// matching CookCLI. Missing recipes or metadata fall back silently to the
+/// raw quantity.
+///
 /// # Arguments
 /// * `path` - Path to the `.menu` file
 /// * `base_dirs` - Directories to look up referenced recipes in
-/// * `scale` - Multiplier applied to the whole menu (1.0 for as written)
+/// * `scale` - Multiplier applied to the whole menu (1.0 for as written);
+///   must be finite and greater than 0
 ///
 /// # Returns
-/// The parsed menu, or an error if the file cannot be read or isn't a menu.
+/// The parsed menu, or `CooklangError::MenuError` if `scale` is invalid or
+/// the file isn't a menu, or an error if the file cannot be read.
 #[uniffi::export]
 pub fn parse_menu(
     path: String,

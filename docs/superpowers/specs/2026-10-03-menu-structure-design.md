@@ -150,9 +150,21 @@ Fills `scale` on every `RecipeReference`, ported from CookCLI's
 - other unit → target / referenced `yield` value when units match
   case-insensitively (fallback: raw)
 
-Quantities accept integers, decimals, and fractions (`1/2`). Referenced
-recipes are loaded with `get_recipe(base_dirs, path)` and memoised per call;
-missing recipes fall back to raw. `yield` is parsed as `VALUE%UNIT`.
+Quantities follow Cooklang's number grammar: an optional leading `=`, then
+one integer (`2`), decimal (`1.5`), fraction (`1/2`), or mixed number
+(`1 1/2`). Anything else (`-2`, `1e2`, `inf`, `NaN`, `2 3`, `2-3`, `1/0`) is
+non-numeric → 1.0. A fixed `{=2}` is still multiplied by `menu_scale`, as in
+CookCLI. The same grammar parses string `servings` and the value of `yield`
+(`VALUE%UNIT`); non-finite or non-positive values count as absent.
+
+A referenced recipe is loaded only when the result depends on it (numeric
+target with a unit), memoised per call. Paths resolve against `base_dirs`
+(the library root), not the menu's folder: for each base dir in turn,
+`<path>.cook` then `<path>.menu` (appended explicitly so dotted names aren't
+mistaken for extensions). Missing recipes fall back silently to raw.
+
+The caller must pass a finite `menu_scale > 0`; `ffi::parse_menu` returns
+`CooklangError::MenuError` otherwise.
 
 ## Helpers
 

@@ -276,7 +276,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | `listDir(dir)` | List one folder: its recipes (loaded) and subfolders (with recursive recipe counts, no files opened) |
 | `countRecipes(dir)` | Count recipes under a folder by file name, without opening them |
 | `listMenusForDate(baseDirs, date)` | Find `.menu` files with a section header containing `date` |
-| `parseMenu(path, baseDirs, scale)` | Parse a `.menu` file into days, meals, and items, resolving recipe reference scales. References resolve against `baseDirs` (`<path>.cook`, then `<path>.menu`; `<path>` as-is if it already ends in `.menu`), not the menu's folder; `{=2}` is still multiplied by `scale`; missing recipes fall back silently to the raw quantity. Throws `MenuError` if `scale` is not finite or is `<= 0` |
+| `parseMenu(path, baseDirs, scale)` | Parse a `.menu` file into days, meals, and items, resolving recipe reference scales. References resolve against `baseDirs` (`<path>.cook`, then `<path>.menu`; `<path>` as-is if it already ends in `.menu`), not the menu's folder; `{=2}` is still multiplied by `scale`; missing recipes fall back silently to the raw quantity. Throws `MenuError` if `path` is not a `.menu` file, or if `scale` is not finite or is `<= 0` |
 | `parseMenuContent(content, name)` | Parse menu text without resolving scales |
 | `libraryVersion()` | Get the library version string |
 
@@ -382,7 +382,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | Field | Type | Description |
 |-------|------|-------------|
 | `mealType` | `String?` | e.g. `Breakfast`; null for items before the first meal heading |
-| `time` | `String?` | `HH:MM` from a heading like `Breakfast (08:30):` |
+| `time` | `String?` | Time as written, `H:MM` or `HH:MM`, from a heading like `Breakfast (08:30):` |
 | `items` | `List<FfiMenuItem>` | Items in file order |
 
 #### FfiMenuItem

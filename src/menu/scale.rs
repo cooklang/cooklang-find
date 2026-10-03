@@ -14,7 +14,8 @@ impl Menu {
     /// The reference's `{target%unit}` decides the multiplier:
     ///
     /// - nothing or a non-numeric target — 1
-    /// - no unit — the target itself (`{2}` = ×2)
+    /// - no unit — the target itself (`{2}` = ×2; `{0}` = 0, as written,
+    ///   matching CookCLI)
     /// - `servings` — target ÷ the referenced recipe's `servings`
     /// - any other unit — target ÷ the referenced recipe's `yield` value,
     ///   when the units match (case-insensitive)

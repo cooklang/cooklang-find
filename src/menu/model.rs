@@ -37,7 +37,8 @@ pub struct MenuMeal {
     /// Heading without the colon and time, e.g. "Breakfast"; `None` for
     /// items before the first heading in a section.
     pub meal_type: Option<String>,
-    /// `HH:MM` from a heading like `Breakfast (08:30):`.
+    /// Time as written, `H:MM` or `HH:MM`, from a heading like
+    /// `Breakfast (08:30):`.
     pub time: Option<String>,
     /// Items in file order.
     pub items: Vec<MenuItem>,

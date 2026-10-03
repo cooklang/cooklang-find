@@ -42,10 +42,12 @@ pub struct MenuSection {
 }
 
 pub struct MenuMeal {
-    /// Header text without the trailing `:` and `(HH:MM)`, e.g. "Breakfast".
+    /// Header text without the trailing `:` and `(H:MM)`/`(HH:MM)`, e.g.
+    /// "Breakfast".
     /// `None` for items before the first meal header in a section.
     pub meal_type: Option<String>,
-    /// `HH:MM` from a header like `Breakfast (08:30):`.
+    /// Time as written, `H:MM` or `HH:MM`, from a header like
+    /// `Breakfast (08:30):` or `Lunch (8:30):`.
     pub time: Option<String>,
     pub items: Vec<MenuItem>,
 }
@@ -112,15 +114,17 @@ extraction. Parsing never fails; unrecognised content becomes `Text`.
    metadata lines are skipped.
 2. Section header: trimmed line starting with `=`; name = trim `=` and
    whitespace (`section_name`, shared with `list_menus_for_date`). Starts a new `MenuSection`. Content before the first header
-   goes into a section with `name: None` (omitted if empty).
+   goes into a section with `name: None` (omitted if empty). A bare `=`
+   line likewise opens an unnamed section (`name: None`), which is also
+   dropped when empty.
 3. Note: trimmed line starting with `--` → `Note` in the current meal.
 4. Meal header: line (bullet-less, trailing `\` ignored, not starting with
-   `--`) matching `^([^@:]+?)\s*(\((HH:MM)\))?\s*:` followed by
+   `--`) matching `^([^@:]+?)\s*(\((H?H:MM)\))?\s*:` followed by
    whitespace or end of line (so `2:30` and `https://` don't count), where
    the rest of the line is empty, starts with `@`, or starts with `--` (so
    `Tip: prep ahead` stays `Text`, while `Dinner: -- eating out` starts a
-   "Dinner" meal whose first item is `Note`). Starts a new `MenuMeal`; `(HH:MM)` is extracted into
-   `time`, other parentheses stay in the name (`Lunch (packed)`). Items after
+   "Dinner" meal whose first item is `Note`). Starts a new `MenuMeal`; `(H:MM)` or `(HH:MM)` is extracted
+   into `time` as written, other parentheses stay in the name (`Lunch (packed)`). Items after
    the `:` belong to the new meal (`Breakfast: @eggs{}`).
 5. Other lines: tokenise into items. A leading `-` bullet is dropped only
    when followed by whitespace or end of line (`-5 degrees` is text); a
@@ -143,8 +147,9 @@ extraction. Parsing never fails; unrecognised content becomes `Text`.
 7. Block comments `[- … -]` are removed before scanning.
 
 Date regex: `\d{4}-\d{2}-\d{2}` not adjacent to other digits, first match. This is consistent with
-`list_menus_for_date`'s substring match, so a menu found for a date always
-has a section with that `date` (for ISO dates).
+`list_menus_for_date`'s substring match, so a menu found for a date has a
+section with that `date` when the date is the first ISO date in that
+section's header (a header with two dates only records the first).
 
 ## Scale resolution
 
@@ -159,7 +164,8 @@ Fills `scale` on every `RecipeReference`, ported from CookCLI's
 
 - no quantity → 1.0
 - non-numeric quantity → 1.0
-- number, no unit → raw multiplier
+- number, no unit → raw multiplier (`{0}` gives scale 0, as written,
+  matching CookCLI)
 - unit `serving(s)` → target / referenced `servings` (fallback: raw)
 - other unit → target / referenced `yield` value when units match
   case-insensitively (fallback: raw)
@@ -178,8 +184,14 @@ target with a unit), memoised per call. Paths resolve against `base_dirs`
 mistaken for extensions); a path already ending in `.menu`
 (`@./Weekly.menu{}`) is looked up as-is. Missing recipes fall back silently to raw.
 
+`@../` references are resolved by joining the path onto the base dir, so
+they may point outside it; only the target's frontmatter is read.
+Referenced recipes' metadata comes from `RecipeEntry`'s frontmatter reader
+(no BOM strip; frontmatter longer than 30 lines is ignored), not
+`Menu::parse`'s.
+
 The caller must pass a finite `menu_scale > 0`; `ffi::parse_menu` returns
-`CooklangError::MenuError` otherwise.
+`CooklangError::MenuError` otherwise (and for non-`.menu` paths).
 
 ## Helpers
 
@@ -206,7 +218,8 @@ In `src/ffi.rs`, following existing record/enum conventions:
   `uniffi::Enum`. `FfiMenu.metadata` uses the existing metadata
   representation.
 - `parse_menu(path: String, base_dirs: Vec<String>, scale: f64) -> Result<FfiMenu, CooklangError>`
-  — reads, parses, resolves scales.
+  — reads, parses, resolves scales. Returns `CooklangError::MenuError` when
+  `path` is not a `.menu` file or `scale` is non-finite or `<= 0`.
 - `parse_menu_content(content: String, name: String) -> FfiMenu` — no scale
   resolution.
 - uniffi records can't carry methods, so `FfiMenu` precomputes the helpers

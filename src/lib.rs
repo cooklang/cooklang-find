@@ -8,6 +8,8 @@
 //! - Searching recipes by name and content
 //! - Building hierarchical directory trees of recipes
 //! - Extracting and working with recipe metadata
+//! - Parsing `.menu` files into structured days, meals, and items
+//!   ([`Menu`]), with recipe reference scaling
 //!
 //! ## Quick Start
 //!

@@ -8,6 +8,7 @@ A Rust library for finding and managing [Cooklang](https://cooklang.org/) recipe
 - **Recipe Tree**: Build and navigate a hierarchical structure of your recipe collection
 - **Metadata Support**: Parse and access recipe metadata using the new frontmatter format
 - **Title Image Support**: Automatically find and associate images with recipes
+- **Structured Menus**: Parse `.menu` meal plans into days, meals, and items, with recipe reference scaling
 - **Error Handling**: Comprehensive error handling with custom error types
 
 ## Installation

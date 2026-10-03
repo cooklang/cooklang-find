@@ -1,5 +1,7 @@
 # Menu Structure Implementation Plan
 
+> **Note:** The spec (`docs/superpowers/specs/2026-10-03-menu-structure-design.md`) is authoritative; this plan's code snippets predate the review fixes.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Parse `.menu` files into a structured `Menu` (sections → meals → items) with date/recipe helpers, reference scale resolution, and uniffi bindings.

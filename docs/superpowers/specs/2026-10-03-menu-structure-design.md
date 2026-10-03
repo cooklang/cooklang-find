@@ -1,7 +1,7 @@
 # Design: structured `Menu` model
 
 **Date:** 2026-10-03
-**Status:** Draft
+**Status:** Approved
 
 ## Overview
 
@@ -70,10 +70,12 @@ pub enum MenuItem {
         quantity: Option<String>,
         unit: Option<String>,
     },
-    /// Connecting text such as "with", whitespace-collapsed.
-    Text(String),
-    /// `-- comment` lines.
-    Note(String),
+    /// Connecting text such as "with". Whitespace runs collapse to one
+    /// space; a single leading/trailing space is kept so consumers can
+    /// concatenate items as-is.
+    Text { text: String },
+    /// `-- comment`, on its own line or at the end of one.
+    Note { text: String },
 }
 ```
 
@@ -97,9 +99,9 @@ extraction. Parsing never fails; unrecognised content becomes `Text`.
    whitespace. Starts a new `MenuSection`. Content before the first header
    goes into a section with `name: None` (omitted if empty).
 3. Note: trimmed line starting with `--` → `Note` in the current meal.
-4. Meal header: line (bullet-less, trailing `\` ignored) whose text before
-   the first `:` is non-empty, contains no `@`, and consists of letters,
-   spaces, and an optional `(HH:MM)`. Starts a new `MenuMeal`; `(HH:MM)` is
+4. Meal header: line (bullet-less, trailing `\` ignored, not starting with
+   `--`) matching `^([^@:()]+?)\s*(\((HH:MM)\))?\s*:` followed by
+   whitespace or end of line (so `2:30` and `https://` don't count). Starts a new `MenuMeal`; `(HH:MM)` is
    extracted into `time`. Anything after the `:` on the same line is scanned
    as items of the new meal (`Breakfast: @eggs{}`).
 5. Other lines: tokenise into items. Leading `- ` bullets and trailing `\`
@@ -107,8 +109,10 @@ extraction. Parsing never fails; unrecognised content becomes `Text`.
    - `@name{qty%unit}` / `@name{}` — name may contain spaces when braces
      follow; `@name` without braces ends at the first whitespace or
      punctuation. Trailing `(note)` after an ingredient is ignored.
-   - Name starting with `./` or containing `/` → `RecipeReference`
-     (strip `./`, strip `.cook`). Otherwise → `Ingredient`.
+   - Name starting with `./` or `../` → `RecipeReference` (strip `./`,
+     strip `.cook`). Otherwise → `Ingredient`. Leading modifiers
+     (`?`, `+`, `-`, `&`) are ignored.
+   - `--` outside a component starts a `Note` for the rest of the line.
    - Remaining text between items → `Text` (skipped when blank).
 6. Meals with no items are dropped; sections are kept even if empty so day
    lists stay complete.
@@ -144,8 +148,8 @@ missing recipes fall back to raw. `yield` is parsed as `VALUE%UNIT`.
 
 ```rust
 impl Menu {
-    pub fn section_for_date(&self, date: &str) -> Option<&MenuSection>;
-    pub fn dates(&self) -> Vec<&str>;                    // in file order
+    pub fn sections_for_date(&self, date: &str) -> Vec<&MenuSection>;
+    pub fn dates(&self) -> Vec<&str>;                    // distinct, file order
     pub fn date_range(&self) -> Option<(&str, &str)>;    // lexical min/max
     pub fn recipe_references(&self) -> Vec<&MenuItem>;   // deduped by path, first occurrence
 }
@@ -168,8 +172,9 @@ In `src/ffi.rs`, following existing record/enum conventions:
   — reads, parses, resolves scales.
 - `parse_menu_content(content: String, name: String) -> FfiMenu` — no scale
   resolution.
-- Helpers exposed as free functions on `FfiMenu` data where uniffi records
-  can't carry methods (`menu_section_for_date`, `menu_date_range`).
+- uniffi records can't carry methods, so `FfiMenu` precomputes the helpers
+  as fields: `dates`, `first_date`, `last_date`, `recipe_references`.
+  Filtering sections by date is left to the host (a one-line filter).
 - `BINDINGS.md` updated.
 
 ## Testing
@@ -186,7 +191,8 @@ Unit tests with `indoc`/`tempfile`:
 - Notes, block comments, content before first header, empty file.
 - `resolve_scales`: servings, yield with matching/mismatched units, missing
   recipe, menu scale multiplication.
-- Helpers: `section_for_date`, `date_range`, dedup in `recipe_references`.
+- Helpers: `sections_for_date`, `dates` dedup, `date_range`, dedup in
+  `recipe_references`.
 
 ## Out of scope
 

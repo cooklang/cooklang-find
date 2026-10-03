@@ -709,6 +709,11 @@ pub fn parse_menu(
     base_dirs: Vec<String>,
     scale: f64,
 ) -> Result<FfiMenu, CooklangError> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(CooklangError::MenuError {
+            reason: format!("Menu scale must be a finite number greater than 0, got {scale}"),
+        });
+    }
     let entry = RecipeEntry::from_path(path.clone().into())?;
     let mut menu = entry.menu().ok_or_else(|| CooklangError::MenuError {
         reason: format!("Not a menu file: {path}"),
@@ -1119,8 +1124,24 @@ mod tests {
 
         assert!(matches!(
             &menu.recipe_references[0],
-            FfiMenuItem::RecipeReference { scale: Some(s), .. } if *s == 3.0
+            FfiMenuItem::RecipeReference { scale: Some(s), .. } if (s - 3.0).abs() < 1e-9
         ));
+    }
+
+    #[test]
+    fn test_parse_menu_rejects_invalid_scale() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path().to_str().unwrap();
+        let menu_path = format!("{dir}/week.menu");
+        fs::write(&menu_path, "= Day 1\n@./Pancakes{2}\n").unwrap();
+
+        for scale in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 0.0] {
+            let result = parse_menu(menu_path.clone(), vec![dir.to_string()], scale);
+            assert!(
+                matches!(result, Err(CooklangError::MenuError { .. })),
+                "scale {scale}"
+            );
+        }
     }
 
     #[test]

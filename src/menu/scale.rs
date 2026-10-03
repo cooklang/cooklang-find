@@ -39,9 +39,15 @@ impl Menu {
                 ..
             } = item
             {
-                let size = sizes
-                    .entry(path.clone())
-                    .or_insert_with(|| RecipeSize::load(base_dirs, path));
+                let sizes = &mut sizes;
+                let size = move || {
+                    // Moving the borrow in (not reborrowing) lets the
+                    // returned reference outlive this `FnOnce` call.
+                    let sizes = sizes;
+                    &*sizes
+                        .entry(path.clone())
+                        .or_insert_with(|| RecipeSize::load(base_dirs, path))
+                };
                 *scale =
                     Some(scale_factor(quantity.as_deref(), unit.as_deref(), size) * menu_scale);
             }
@@ -76,21 +82,30 @@ impl RecipeSize {
     }
 }
 
-fn scale_factor(quantity: Option<&str>, unit: Option<&str>, size: &RecipeSize) -> f64 {
+/// Computes one reference's multiplier (before `menu_scale`).
+///
+/// `size` is only called when the result depends on the referenced recipe,
+/// i.e. for a numeric target with a unit.
+fn scale_factor<'a>(
+    quantity: Option<&str>,
+    unit: Option<&str>,
+    size: impl FnOnce() -> &'a RecipeSize,
+) -> f64 {
     let Some(target) = quantity.and_then(parse_number) else {
         return 1.0;
     };
+    let Some(unit) = unit else {
+        return target;
+    };
+    let size = size();
     match unit {
-        None => target,
-        Some(unit)
-            if unit.eq_ignore_ascii_case("servings") || unit.eq_ignore_ascii_case("serving") =>
-        {
+        unit if unit.eq_ignore_ascii_case("servings") || unit.eq_ignore_ascii_case("serving") => {
             match size.servings {
                 Some(base) if base > 0.0 => target / base,
                 _ => target,
             }
         }
-        Some(unit) => match &size.yield_amount {
+        unit => match &size.yield_amount {
             Some((base, base_unit)) if base_unit.eq_ignore_ascii_case(unit) && *base > 0.0 => {
                 target / base
             }
@@ -256,6 +271,26 @@ mod tests {
             resolve("@./Pancakes{10%servings}", &dir, 2.0),
             vec![Some(10.0)]
         );
+    }
+
+    #[test]
+    fn size_is_not_looked_up_without_numeric_target_and_unit() {
+        let no_lookup = || -> &RecipeSize { panic!("recipe size looked up") };
+        assert_eq!(scale_factor(None, None, no_lookup), 1.0);
+        assert_eq!(scale_factor(Some("2"), None, no_lookup), 2.0);
+        assert_eq!(scale_factor(Some("=2"), None, no_lookup), 2.0);
+        assert_eq!(scale_factor(Some("some"), None, no_lookup), 1.0);
+        assert_eq!(scale_factor(Some("some"), Some("servings"), no_lookup), 1.0);
+        assert_eq!(scale_factor(None, Some("ml"), no_lookup), 1.0);
+    }
+
+    #[test]
+    fn size_is_looked_up_for_numeric_target_with_unit() {
+        let size = RecipeSize {
+            servings: Some(4.0),
+            yield_amount: None,
+        };
+        assert_eq!(scale_factor(Some("8"), Some("servings"), || &size), 2.0);
     }
 
     #[test]

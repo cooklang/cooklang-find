@@ -1,0 +1,196 @@
+# Design: structured `Menu` model
+
+**Date:** 2026-10-03
+**Status:** Draft
+
+## Overview
+
+`.menu` files are currently surfaced only as `RecipeEntry` values. Every
+consumer re-parses them to show a meal plan:
+
+- CookCLI: `server/handlers/menus.rs` (`GET /api/menus/*path`),
+  `web/builders.rs` (HTML template), `server/ui.rs`, and
+  `shopping_list::add_menu`, plus `util/menu_scale.rs` for reference scaling.
+- iOS: `MealPlanning/Mapper/MealPlanMapper.swift`.
+
+This design adds a `Menu` structure to cooklang-find that gives consumers the
+days, meals, and items of a menu, plus helpers for common display needs. Its
+shape mirrors CookCLI's existing `/api/menus/*path` response so CookCLI can
+migrate onto it with minimal changes and iOS can drop its own mapper.
+
+## Data model
+
+New file `src/menu/model.rs`, re-exported from `menu` and the crate root. All
+types derive `Debug, Clone, PartialEq, Serialize`.
+
+```rust
+pub struct Menu {
+    /// Frontmatter `title`, else the fallback name (file stem).
+    pub name: String,
+    /// Frontmatter, parsed with the existing `Metadata` type.
+    pub metadata: Metadata,
+    pub sections: Vec<MenuSection>,
+}
+
+pub struct MenuSection {
+    /// Section header text with `=` markers trimmed. `None` for content
+    /// before the first header.
+    pub name: Option<String>,
+    /// First `YYYY-MM-DD` found anywhere in the header, as written.
+    pub date: Option<String>,
+    pub meals: Vec<MenuMeal>,
+}
+
+pub struct MenuMeal {
+    /// Header text without the trailing `:` and `(HH:MM)`, e.g. "Breakfast".
+    /// `None` for items before the first meal header in a section.
+    pub meal_type: Option<String>,
+    /// `HH:MM` from a header like `Breakfast (08:30):`.
+    pub time: Option<String>,
+    pub items: Vec<MenuItem>,
+}
+
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MenuItem {
+    RecipeReference {
+        /// Last path component, e.g. "Easy Pancakes".
+        name: String,
+        /// Path relative to the menu's base, without `./` and `.cook`,
+        /// e.g. "Breakfast/Easy Pancakes". Suitable for `get_recipe`.
+        path: String,
+        /// Target quantity as authored inside `{}` (e.g. "2", "1/2").
+        quantity: Option<String>,
+        /// Target unit as authored (e.g. "servings", "ml").
+        unit: Option<String>,
+        /// Resolved multiplier. `None` until `Menu::resolve_scales` runs.
+        scale: Option<f64>,
+    },
+    Ingredient {
+        name: String,
+        quantity: Option<String>,
+        unit: Option<String>,
+    },
+    /// Connecting text such as "with", whitespace-collapsed.
+    Text(String),
+    /// `-- comment` lines.
+    Note(String),
+}
+```
+
+Differences from CookCLI's API shape, intentional:
+
+- `meal_type` is `Option` instead of the synthetic `"Items"` string; CookCLI
+  can map `None` to `"Items"` when serializing its response.
+- `Text` and `Note` are kept so the HTML view and iOS (which shows notes) can
+  render the full menu. CookCLI's JSON API can filter them out.
+- Quantities are the authored text; this crate does not format or scale loose
+  ingredients.
+
+## Parsing
+
+`Menu::parse(content: &str, fallback_name: &str) -> Menu`. A line scanner,
+no `cooklang` dependency, consistent with `menu/mod.rs` and metadata
+extraction. Parsing never fails; unrecognised content becomes `Text`.
+
+1. Strip YAML frontmatter and parse it with `Metadata`.
+2. Section header: trimmed line starting with `=`; name = trim `=` and
+   whitespace. Starts a new `MenuSection`. Content before the first header
+   goes into a section with `name: None` (omitted if empty).
+3. Note: trimmed line starting with `--` → `Note` in the current meal.
+4. Meal header: line (bullet-less, trailing `\` ignored) whose text before
+   the first `:` is non-empty, contains no `@`, and consists of letters,
+   spaces, and an optional `(HH:MM)`. Starts a new `MenuMeal`; `(HH:MM)` is
+   extracted into `time`. Anything after the `:` on the same line is scanned
+   as items of the new meal (`Breakfast: @eggs{}`).
+5. Other lines: tokenise into items. Leading `- ` bullets and trailing `\`
+   are dropped.
+   - `@name{qty%unit}` / `@name{}` — name may contain spaces when braces
+     follow; `@name` without braces ends at the first whitespace or
+     punctuation. Trailing `(note)` after an ingredient is ignored.
+   - Name starting with `./` or containing `/` → `RecipeReference`
+     (strip `./`, strip `.cook`). Otherwise → `Ingredient`.
+   - Remaining text between items → `Text` (skipped when blank).
+6. Meals with no items are dropped; sections are kept even if empty so day
+   lists stay complete.
+7. Block comments `[- … -]` are removed before scanning.
+
+Date regex: `\d{4}-\d{2}-\d{2}`, first match. This is consistent with
+`list_menus_for_date`'s substring match, so a menu found for a date always
+has a section with that `date` (for ISO dates).
+
+## Scale resolution
+
+```rust
+impl Menu {
+    pub fn resolve_scales<P: AsRef<Utf8Path>>(&mut self, base_dirs: &[P], menu_scale: f64);
+}
+```
+
+Fills `scale` on every `RecipeReference`, ported from CookCLI's
+`menu_scale::reference_scale_factor`, multiplied by `menu_scale`:
+
+- no quantity → 1.0
+- non-numeric quantity → 1.0
+- number, no unit → raw multiplier
+- unit `serving(s)` → target / referenced `servings` (fallback: raw)
+- other unit → target / referenced `yield` value when units match
+  case-insensitively (fallback: raw)
+
+Quantities accept integers, decimals, and fractions (`1/2`). Referenced
+recipes are loaded with `get_recipe(base_dirs, path)` and memoised per call;
+missing recipes fall back to raw. `yield` is parsed as `VALUE%UNIT`.
+
+## Helpers
+
+```rust
+impl Menu {
+    pub fn section_for_date(&self, date: &str) -> Option<&MenuSection>;
+    pub fn dates(&self) -> Vec<&str>;                    // in file order
+    pub fn date_range(&self) -> Option<(&str, &str)>;    // lexical min/max
+    pub fn recipe_references(&self) -> Vec<&MenuItem>;   // deduped by path, first occurrence
+}
+```
+
+## Entry points
+
+- `Menu::parse(content, fallback_name)`.
+- `RecipeEntry::menu(&self) -> Option<Result<Menu, RecipeEntryError>>` —
+  `None` when `!is_menu()`; uses `content()` and `name()`.
+
+## FFI
+
+In `src/ffi.rs`, following existing record/enum conventions:
+
+- Records `FfiMenu`, `FfiMenuSection`, `FfiMenuMeal`; `FfiMenuItem` as a
+  `uniffi::Enum`. `FfiMenu.metadata` uses the existing metadata
+  representation.
+- `parse_menu(path: String, base_dirs: Vec<String>, scale: f64) -> Result<FfiMenu, CooklangError>`
+  — reads, parses, resolves scales.
+- `parse_menu_content(content: String, name: String) -> FfiMenu` — no scale
+  resolution.
+- Helpers exposed as free functions on `FfiMenu` data where uniffi records
+  can't carry methods (`menu_section_for_date`, `menu_date_range`).
+- `BINDINGS.md` updated.
+
+## Testing
+
+Unit tests with `indoc`/`tempfile`:
+
+- CookCLI seed `Weekly Plan.menu` and a `3 Day Plan` sample as fixtures,
+  asserting full structure.
+- Headers: `==Saturday (2026-03-07)==`, `= 2026-06-24 Dinner`, `== Day 1 ==`.
+- Meal headers with time, with trailing `\`, inline items after `:`.
+- References with/without `./`, with/without `.cook`, nested folders,
+  `{}`, `{2}`, `{3%servings}`, `{500%ml}`, `{1/2}`.
+- Unbraced `@oats`, multi-word braced ingredients, trailing `(cooked)`.
+- Notes, block comments, content before first header, empty file.
+- `resolve_scales`: servings, yield with matching/mismatched units, missing
+  recipe, menu scale multiplication.
+- Helpers: `section_for_date`, `date_range`, dedup in `recipe_references`.
+
+## Out of scope
+
+- Scaling or formatting loose ingredient quantities.
+- Date parsing, weekday names, timezone handling.
+- Nested sub-references (CookCLI shopping list's `sub_refs`).
+- Migrating CookCLI and iOS to the new model (follow-up PRs).

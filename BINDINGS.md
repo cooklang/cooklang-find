@@ -90,6 +90,15 @@ for node in tree.allNodes() {
     print("\(node.name) - hasRecipe: \(node.hasRecipe)")
 }
 
+// List one folder: only its own recipes are read, subfolders are just counted
+let listing = try listDir(dir: "./recipes")
+for entry in listing.entries {
+    switch entry {
+    case .recipe(let recipe): print("Recipe: \(recipe.name() ?? "Unknown")")
+    case .folder(let name, _, let recipeCount): print("Folder: \(name) (\(recipeCount))")
+    }
+}
+
 // Create recipe from content
 let content = """
 ---
@@ -203,6 +212,15 @@ tree.allNodes().forEach { node ->
     println("${node.name} - hasRecipe: ${node.hasRecipe}")
 }
 
+// List one folder: only its own recipes are read, subfolders are just counted
+val listing = listDir("./recipes")
+listing.entries.forEach { entry ->
+    when (entry) {
+        is FfiDirEntry.Recipe -> println("Recipe: ${entry.recipe.name()}")
+        is FfiDirEntry.Folder -> println("Folder: ${entry.name} (${entry.recipeCount})")
+    }
+}
+
 // Create recipe from content
 val content = """
 ---
@@ -254,7 +272,9 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | `recipeFromPath(path)` | Create a recipe from a file path |
 | `search(baseDir, query)` | Search for recipes matching a query |
 | `searchWithMetadataFilter(baseDir, query, filterJson)` | Search matching a query, keeping only recipes whose frontmatter satisfies a metadata filter (JSON grammar; empty `query` is a pure, frontmatter-only filter) |
-| `buildTree(baseDir)` | Build a hierarchical tree of recipes |
+| `buildTree(baseDir)` | Build a hierarchical tree of recipes (reads every recipe in the subtree) |
+| `listDir(dir)` | List one folder: its recipes (loaded) and subfolders (with recursive recipe counts, no files opened) |
+| `countRecipes(dir)` | Count recipes under a folder by file name, without opening them |
 | `libraryVersion()` | Get the library version string |
 
 ### Types
@@ -320,6 +340,20 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | `hasRecipe` | `Boolean` | Whether node has a recipe |
 | `children` | `List<String>` | Child node names |
 | `recipeCount` | `UInt` | Recipes in this subtree, including nested ones |
+
+#### FfiDirListing
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | `String` | The listed directory |
+| `entries` | `List<FfiDirEntry>` | Its children, sorted by file name |
+
+#### FfiDirEntry
+
+| Variant | Fields | Description |
+|---------|--------|-------------|
+| `Recipe` | `recipe: FfiRecipeEntry` | A .cook/.menu file directly in the folder |
+| `Folder` | `name: String`, `path: String`, `recipeCount: UInt` | A subfolder; `recipeCount` includes nested recipes and files not downloaded yet |
 
 ## CI/CD
 

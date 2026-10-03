@@ -8,7 +8,9 @@ use crate::walk::glob_visible;
 use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
+mod listing;
 mod model;
+pub use listing::{count_recipes, list_dir, DirEntry, DirListing};
 pub use model::RecipeTree;
 
 /// Errors that can occur when building a recipe tree.
@@ -22,6 +24,9 @@ pub enum TreeError {
 
     #[error("Failed to read directory: {0}")]
     GlobError(#[from] glob::GlobError),
+
+    #[error("Failed to read directory: {0}")]
+    IoError(#[from] std::io::Error),
 
     #[error("Failed to create glob pattern: {0}")]
     PatternError(#[from] glob::PatternError),
@@ -65,6 +70,9 @@ pub enum TreeError {
 /// }
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
+///
+/// This opens every recipe in the subtree. To show one folder at a time,
+/// use [`list_dir`] instead.
 pub fn build_tree<P: AsRef<Utf8Path>>(base_dir: P) -> Result<RecipeTree, TreeError> {
     let base_dir = base_dir.as_ref();
 

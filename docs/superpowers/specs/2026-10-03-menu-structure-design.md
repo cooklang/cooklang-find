@@ -55,7 +55,7 @@ pub enum MenuItem {
     RecipeReference {
         /// Last path component, e.g. "Easy Pancakes".
         name: String,
-        /// Path relative to the menu's base, without `./` and `.cook`,
+        /// Path relative to the library root, without `./` and `.cook`,
         /// e.g. "Breakfast/Easy Pancakes". Suitable for `get_recipe`.
         path: String,
         /// Target quantity as authored inside `{}` (e.g. "2", "1/2").

@@ -49,14 +49,11 @@ impl Menu {
                 ..
             } = item
             {
-                let sizes = &mut sizes;
-                let size = move || {
-                    // Moving the borrow in (not reborrowing) lets the
-                    // returned reference outlive this `FnOnce` call.
-                    let sizes = sizes;
-                    &*sizes
+                let size = || {
+                    sizes
                         .entry(path.clone())
                         .or_insert_with(|| RecipeSize::load(base_dirs, path))
+                        .clone()
                 };
                 *scale =
                     Some(scale_factor(quantity.as_deref(), unit.as_deref(), size) * menu_scale);
@@ -66,7 +63,7 @@ impl Menu {
 }
 
 /// What a referenced recipe declares about its own size.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct RecipeSize {
     servings: Option<f64>,
     yield_amount: Option<(f64, String)>,
@@ -107,10 +104,10 @@ impl RecipeSize {
 ///
 /// `size` is only called when the result depends on the referenced recipe,
 /// i.e. for a numeric target with a unit.
-fn scale_factor<'a>(
+fn scale_factor(
     quantity: Option<&str>,
     unit: Option<&str>,
-    size: impl FnOnce() -> &'a RecipeSize,
+    size: impl FnOnce() -> RecipeSize,
 ) -> f64 {
     let Some(target) = quantity.and_then(parse_number) else {
         return 1.0;
@@ -430,7 +427,7 @@ mod tests {
 
     #[test]
     fn size_is_not_looked_up_without_numeric_target_and_unit() {
-        let no_lookup = || -> &RecipeSize { panic!("recipe size looked up") };
+        let no_lookup = || -> RecipeSize { panic!("recipe size looked up") };
         assert_eq!(scale_factor(None, None, no_lookup), 1.0);
         assert_eq!(scale_factor(Some("2"), None, no_lookup), 2.0);
         assert_eq!(scale_factor(Some("=2"), None, no_lookup), 2.0);
@@ -445,7 +442,10 @@ mod tests {
             servings: Some(4.0),
             yield_amount: None,
         };
-        assert_eq!(scale_factor(Some("8"), Some("servings"), || &size), 2.0);
+        assert_eq!(
+            scale_factor(Some("8"), Some("servings"), || size.clone()),
+            2.0
+        );
     }
 
     #[test]

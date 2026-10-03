@@ -17,7 +17,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-cooklang-find = "0.5.1"
+cooklang-find = "0.9"
 ```
 
 ### iOS (Swift Package Manager)
@@ -155,6 +155,95 @@ match search(Path::new("~/recipes"), "pancake") {
 }
 ```
 
+### Working with Menus
+
+`.menu` files are meal plans: sections (usually days) that hold meals, which
+hold recipe references and loose ingredients. Given this menu:
+
+```cooklang
+---
+title: Week 10
+servings: 2
+---
+
+== Saturday (2026-03-07) ==
+
+Breakfast (08:30):
+- @./Breakfast/Easy Pancakes{4%servings} with @maple syrup{2%tbsp}
+
+Dinner:
+- @./Risotto{}
+-- save leftovers for lunch
+
+== Sunday (2026-03-08) ==
+
+Lunch:
+- @./Risotto{1/2}
+```
+
+`Menu::parse` (or `RecipeEntry::menu()` for a `.menu` file) gives:
+
+```text
+Menu { name: "Week 10", metadata, sections }
+└─ MenuSection { name: "Saturday (2026-03-07)", date: "2026-03-07" }
+   ├─ MenuMeal { meal_type: "Breakfast", time: "08:30" }
+   │  ├─ RecipeReference { name: "Easy Pancakes", path: "Breakfast/Easy Pancakes",
+   │  │                    quantity: "4", unit: "servings", scale }
+   │  ├─ Text { text: " with " }
+   │  └─ Ingredient { name: "maple syrup", quantity: "2", unit: "tbsp" }
+   └─ MenuMeal { meal_type: "Dinner", time: None }
+      ├─ RecipeReference { name: "Risotto", path: "Risotto", .. }
+      ├─ LineBreak
+      └─ Note { text: "save leftovers for lunch" }
+```
+
+- `date` is the first `YYYY-MM-DD` in the section header; `time` comes from a
+  meal header like `Breakfast (08:30):`.
+- Quantities are kept as written (`"1/2"`, `"2"`). Items before the first meal
+  header get `meal_type: None`.
+- `LineBreak` separates the lines of a meal, so items can be rendered in order.
+- `MenuItem` is `#[non_exhaustive]`; match it with a wildcard arm.
+
+```rust
+use cooklang_find::{get_recipe, MenuItem};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let entry = get_recipe(vec!["./recipes"], "Week 10")?;
+    let mut menu = entry.menu().expect("not a .menu file")?;
+
+    // Turn `{4%servings}`, `{2}`, `{500%ml}` into multipliers using each
+    // referenced recipe's own `servings` / `yield`. Paths resolve against the
+    // library root; the last argument scales the whole menu.
+    menu.resolve_scales(&["./recipes"], 1.0);
+
+    // What's on today?
+    for section in menu.sections_for_date("2026-03-07") {
+        for meal in &section.meals {
+            println!("{}", meal.meal_type.as_deref().unwrap_or("Other"));
+            for item in &meal.items {
+                match item {
+                    MenuItem::RecipeReference { name, scale, .. } => {
+                        println!("  {name} ×{}", scale.unwrap_or(1.0))
+                    }
+                    MenuItem::Ingredient { name, .. } => println!("  {name}"),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Plan span for a subtitle, and every recipe once (for prefetching).
+    let range = menu.date_range(); // Some(("2026-03-07", "2026-03-08"))
+    let recipes = menu.recipe_references();
+    Ok(())
+}
+```
+
+To find which menus cover a day, use `list_menus_for_date(&[dir], "2026-03-07")`.
+On iOS and Android, `parseMenu(path, baseDirs, scale)` returns the same
+structure as `FfiMenu`, with `dates`, `firstDate`, `lastDate` and
+`recipeReferences` precomputed (see [BINDINGS.md](BINDINGS.md)).
+
 ## Recipe Format
 
 The library supports Cooklang recipes with frontmatter metadata. Example:
@@ -185,6 +274,13 @@ Add @salt{1%tsp} to taste.
 - Support for nested directories
 - Easy navigation of recipe collection
 - Automatic directory creation and management
+
+### Menus
+- Sections with dates, meals with optional times, and their items
+- Recipe references, loose ingredients, connecting text, notes, line breaks
+- Reference scaling per the Cooklang spec (`{2}`, `{4%servings}`, `{500%ml}`)
+- Date helpers: `sections_for_date`, `dates`, `date_range`
+- Find menus for a day with `list_menus_for_date`
 
 ### Metadata Support
 - Parse frontmatter metadata

@@ -99,31 +99,53 @@ fn scale_factor(quantity: Option<&str>, unit: Option<&str>, size: &RecipeSize) -
     }
 }
 
-/// Parses `2`, `1.5`, `1/2`, `1 1/2`, and a leading `=` (fixed quantity).
+/// Parses a Cooklang number: an optional leading `=` (fixed quantity)
+/// followed by exactly one of an integer (`2`), a decimal (`1.5`), a
+/// fraction (`1/2`), or a mixed number (`1 1/2`). Anything else (signs,
+/// exponents, `inf`, `NaN`, ranges, several numbers) is rejected.
 fn parse_number(s: &str) -> Option<f64> {
-    let s = s.trim().trim_start_matches('=').trim();
-    let mut total = 0.0;
-    let mut any = false;
-    for part in s.split_whitespace() {
-        total += match part.split_once('/') {
-            Some((numerator, denominator)) => {
-                let denominator: f64 = denominator.parse().ok()?;
-                if denominator == 0.0 {
-                    return None;
-                }
-                numerator.parse::<f64>().ok()? / denominator
-            }
-            None => part.parse::<f64>().ok()?,
-        };
-        any = true;
+    let s = s.trim();
+    let s = s.strip_prefix('=').unwrap_or(s).trim_start();
+    let mut parts = s.split_whitespace();
+    let first = parts.next()?;
+    let value = match (parts.next(), parts.next()) {
+        (None, _) => parse_fraction(first).or_else(|| parse_decimal(first))?,
+        (Some(fraction), None) => parse_integer(first)? + parse_fraction(fraction)?,
+        (Some(_), Some(_)) => return None,
+    };
+    value.is_finite().then_some(value)
+}
+
+fn parse_integer(s: &str) -> Option<f64> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
     }
-    any.then_some(total)
+    s.parse().ok()
+}
+
+fn parse_decimal(s: &str) -> Option<f64> {
+    match s.split_once('.') {
+        Some((whole, fraction)) => {
+            parse_integer(whole)?;
+            parse_integer(fraction)?;
+            s.parse().ok()
+        }
+        None => parse_integer(s),
+    }
+}
+
+fn parse_fraction(s: &str) -> Option<f64> {
+    let (numerator, denominator) = s.split_once('/')?;
+    let numerator = parse_integer(numerator)?;
+    let denominator = parse_integer(denominator)?;
+    (denominator != 0.0).then(|| numerator / denominator)
 }
 
 fn value_number(value: &Value) -> Option<f64> {
-    value
-        .as_f64()
-        .or_else(|| value.as_str().and_then(parse_number))
+    match value.as_f64() {
+        Some(number) => number.is_finite().then_some(number),
+        None => value.as_str().and_then(parse_number),
+    }
 }
 
 /// Parses `yield` metadata of the form `VALUE%UNIT`, e.g. `500%ml`.
@@ -237,10 +259,76 @@ mod tests {
     }
 
     #[test]
-    fn parse_number_handles_mixed_fractions() {
-        assert_eq!(parse_number("1 1/2"), Some(1.5));
-        assert_eq!(parse_number("=2"), Some(2.0));
-        assert_eq!(parse_number("2-3"), None);
-        assert_eq!(parse_number("1/0"), None);
+    fn parse_number_accepts_cooklang_numbers() {
+        let accepted = [
+            ("2", 2.0),
+            ("  2  ", 2.0),
+            ("1.5", 1.5),
+            ("0.5", 0.5),
+            ("1/2", 0.5),
+            ("3/4", 0.75),
+            ("1 1/2", 1.5),
+            ("2  3/4", 2.75),
+            ("=2", 2.0),
+            ("= 2", 2.0),
+            ("=1 1/2", 1.5),
+        ];
+        for (input, expected) in accepted {
+            assert_eq!(parse_number(input), Some(expected), "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn parse_number_rejects_non_cooklang_numbers() {
+        let rejected = [
+            "",
+            " ",
+            "=",
+            "inf",
+            "NaN",
+            "infinity",
+            "-2",
+            "+2",
+            "1e2",
+            "2 3",
+            "1/2 1/2",
+            "2-3",
+            "1/0",
+            "0/0",
+            ".5",
+            "5.",
+            "1.5/2",
+            "1/2.5",
+            "1.5 1/2",
+            "1 1/2 1/2",
+            "==2",
+            "2=",
+            "1//2",
+            "a",
+            "2a",
+            "１",
+        ];
+        for input in rejected {
+            assert_eq!(parse_number(input), None, "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn invalid_reference_quantities_are_one() {
+        let (_t, dir) = recipes_dir();
+        for quantity in ["2 3", "1e2", "-2", "inf", "NaN", "infinity%servings"] {
+            assert_eq!(
+                resolve(&format!("@./Pancakes{{{quantity}}}"), &dir, 1.0),
+                vec![Some(1.0)],
+                "quantity {quantity:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_finite_yield_is_absent() {
+        let (_t, dir) = recipes_dir();
+        fs::write(dir.join("Inf.cook"), "---\nyield: inf%ml\n---\n@x{}\n").unwrap();
+        assert_eq!(resolve("@./Inf{1000%ml}", &dir, 1.0), vec![Some(1000.0)]);
     }
 }

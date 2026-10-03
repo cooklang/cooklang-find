@@ -8,11 +8,11 @@ import Foundation
 // might be in a separate module, or it might be compiled inline into
 // this module. This is a bit of light hackery to work with both.
 #if canImport(CooklangFindFFI)
-    import CooklangFindFFI
+import CooklangFindFFI
 #endif
 
-private extension RustBuffer {
-    /// Allocate a new buffer, copying the contents of a `UInt8` array.
+fileprivate extension RustBuffer {
+    // Allocate a new buffer, copying the contents of a `UInt8` array.
     init(bytes: [UInt8]) {
         let rbuf = bytes.withUnsafeBufferPointer { ptr in
             RustBuffer.from(ptr)
@@ -21,23 +21,69 @@ private extension RustBuffer {
     }
 
     static func empty() -> RustBuffer {
-        RustBuffer(capacity: 0, len: 0, data: nil)
+        RustBuffer(capacity: 0, len:0, data: nil)
     }
 
     static func from(_ ptr: UnsafeBufferPointer<UInt8>) -> RustBuffer {
         try! rustCall { ffi_cooklang_find_rustbuffer_from_bytes(ForeignBytes(bufferPointer: ptr), $0) }
     }
 
-    /// Frees the buffer in place.
-    /// The buffer must not be used after this is called.
+    // Frees the buffer in place.
+    // The buffer must not be used after this is called.
     func deallocate() {
         try! rustCall { ffi_cooklang_find_rustbuffer_free(self, $0) }
     }
 }
 
-private extension ForeignBytes {
+fileprivate extension ForeignBytes {
     init(bufferPointer: UnsafeBufferPointer<UInt8>) {
         self.init(len: Int32(bufferPointer.count), data: bufferPointer.baseAddress)
+    }
+
+    init(rawBufferPointer: UnsafeRawBufferPointer) {
+        self.init(
+            len: Int32(rawBufferPointer.count),
+            data: rawBufferPointer.baseAddress?.assumingMemoryBound(to: UInt8.self)
+        )
+    }
+}
+
+// Converter for `&[u8]` / `[ByRef] bytes` arguments.
+//
+// Conforms to `FfiConverter` so the compiler enforces the full converter
+// method set. Only the scope-bound `lower(_:_body:)` overload is sound —
+// zero-copy byte buffers only flow foreign -> Rust, and only in argument
+// position. The four protocol-witness methods (`lift`, `lower`, `read`,
+// `write`) `fatalError` at runtime if anyone reaches them.
+//
+// The scope-bound `lower` takes a closure because the `ForeignBytes`
+// pointer is only guaranteed valid for the duration of
+// `Data.withUnsafeBytes`. Callers must run the full FFI call inside
+// the closure body.
+fileprivate enum FfiConverterByRefBytes: FfiConverter {
+    typealias SwiftType = Data
+    typealias FfiType = ForeignBytes
+
+    static func lower<R>(_ value: Data, _ body: (ForeignBytes) throws -> R) rethrows -> R {
+        return try value.withUnsafeBytes { rawBuf in
+            try body(ForeignBytes(rawBufferPointer: rawBuf))
+        }
+    }
+
+    static func lower(_ value: Data) -> ForeignBytes {
+        fatalError("ByRef bytes cannot use the plain lower: returning ForeignBytes escapes the Data.withUnsafeBytes scope. Use the scope-bound lower(_:_body:) overload instead.")
+    }
+
+    static func lift(_ value: ForeignBytes) throws -> Data {
+        fatalError("ByRef bytes cannot be lifted: zero-copy &[u8] only flows foreign->Rust")
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        fatalError("ByRef bytes cannot be read from a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+    }
+
+    static func write(_ value: Data, into buf: inout [UInt8]) {
+        fatalError("ByRef bytes cannot be written to a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
     }
 }
 
@@ -48,7 +94,7 @@ private extension ForeignBytes {
 // Helper classes/extensions that don't change.
 // Someday, this will be in a library of its own.
 
-private extension Data {
+fileprivate extension Data {
     init(rustBuffer: RustBuffer) {
         self.init(
             bytesNoCopy: rustBuffer.data!,
@@ -72,15 +118,15 @@ private extension Data {
 //
 // Instead, the read() method and these helper functions input a tuple of data
 
-private func createReader(data: Data) -> (data: Data, offset: Data.Index) {
+fileprivate func createReader(data: Data) -> (data: Data, offset: Data.Index) {
     (data: data, offset: 0)
 }
 
-/// Reads an integer at the current offset, in big-endian order, and advances
-/// the offset on success. Throws if reading the integer would move the
-/// offset past the end of the buffer.
-private func readInt<T: FixedWidthInteger>(_ reader: inout (data: Data, offset: Data.Index)) throws -> T {
-    let range = reader.offset ..< reader.offset + MemoryLayout<T>.size
+// Reads an integer at the current offset, in big-endian order, and advances
+// the offset on success. Throws if reading the integer would move the
+// offset past the end of the buffer.
+fileprivate func readInt<T: FixedWidthInteger>(_ reader: inout (data: Data, offset: Data.Index)) throws -> T {
+    let range = reader.offset..<reader.offset + MemoryLayout<T>.size
     guard reader.data.count >= range.upperBound else {
         throw UniffiInternalError.bufferOverflow
     }
@@ -90,38 +136,38 @@ private func readInt<T: FixedWidthInteger>(_ reader: inout (data: Data, offset: 
         return value as! T
     }
     var value: T = 0
-    let _ = withUnsafeMutableBytes(of: &value) { reader.data.copyBytes(to: $0, from: range) }
+    let _ = withUnsafeMutableBytes(of: &value, { reader.data.copyBytes(to: $0, from: range)})
     reader.offset = range.upperBound
     return value.bigEndian
 }
 
-/// Reads an arbitrary number of bytes, to be used to read
-/// raw bytes, this is useful when lifting strings
-private func readBytes(_ reader: inout (data: Data, offset: Data.Index), count: Int) throws -> [UInt8] {
-    let range = reader.offset ..< (reader.offset + count)
+// Reads an arbitrary number of bytes, to be used to read
+// raw bytes, this is useful when lifting strings
+fileprivate func readBytes(_ reader: inout (data: Data, offset: Data.Index), count: Int) throws -> Array<UInt8> {
+    let range = reader.offset..<(reader.offset+count)
     guard reader.data.count >= range.upperBound else {
         throw UniffiInternalError.bufferOverflow
     }
     var value = [UInt8](repeating: 0, count: count)
-    value.withUnsafeMutableBufferPointer { buffer in
+    value.withUnsafeMutableBufferPointer({ buffer in
         reader.data.copyBytes(to: buffer, from: range)
-    }
+    })
     reader.offset = range.upperBound
     return value
 }
 
-/// Reads a float at the current offset.
-private func readFloat(_ reader: inout (data: Data, offset: Data.Index)) throws -> Float {
-    return try Float(bitPattern: readInt(&reader))
+// Reads a float at the current offset.
+fileprivate func readFloat(_ reader: inout (data: Data, offset: Data.Index)) throws -> Float {
+    return Float(bitPattern: try readInt(&reader))
 }
 
-/// Reads a float at the current offset.
-private func readDouble(_ reader: inout (data: Data, offset: Data.Index)) throws -> Double {
-    return try Double(bitPattern: readInt(&reader))
+// Reads a float at the current offset.
+fileprivate func readDouble(_ reader: inout (data: Data, offset: Data.Index)) throws -> Double {
+    return Double(bitPattern: try readInt(&reader))
 }
 
-/// Indicates if the offset has reached the end of the buffer.
-private func hasRemaining(_ reader: (data: Data, offset: Data.Index)) -> Bool {
+// Indicates if the offset has reached the end of the buffer.
+fileprivate func hasRemaining(_ reader: (data: Data, offset: Data.Index)) -> Bool {
     return reader.offset < reader.data.count
 }
 
@@ -129,34 +175,34 @@ private func hasRemaining(_ reader: (data: Data, offset: Data.Index)) -> Bool {
 // struct, but we use standalone functions instead in order to make external
 // types work.  See the above discussion on Readers for details.
 
-private func createWriter() -> [UInt8] {
+fileprivate func createWriter() -> [UInt8] {
     return []
 }
 
-private func writeBytes<S: Sequence>(_ writer: inout [UInt8], _ byteArr: S) where S.Element == UInt8 {
+fileprivate func writeBytes<S>(_ writer: inout [UInt8], _ byteArr: S) where S: Sequence, S.Element == UInt8 {
     writer.append(contentsOf: byteArr)
 }
 
-/// Writes an integer in big-endian order.
-///
-/// Warning: make sure what you are trying to write
-/// is in the correct type!
-private func writeInt<T: FixedWidthInteger>(_ writer: inout [UInt8], _ value: T) {
+// Writes an integer in big-endian order.
+//
+// Warning: make sure what you are trying to write
+// is in the correct type!
+fileprivate func writeInt<T: FixedWidthInteger>(_ writer: inout [UInt8], _ value: T) {
     var value = value.bigEndian
     withUnsafeBytes(of: &value) { writer.append(contentsOf: $0) }
 }
 
-private func writeFloat(_ writer: inout [UInt8], _ value: Float) {
+fileprivate func writeFloat(_ writer: inout [UInt8], _ value: Float) {
     writeInt(&writer, value.bitPattern)
 }
 
-private func writeDouble(_ writer: inout [UInt8], _ value: Double) {
+fileprivate func writeDouble(_ writer: inout [UInt8], _ value: Double) {
     writeInt(&writer, value.bitPattern)
 }
 
-/// Protocol for types that transfer other types across the FFI. This is
-/// analogous to the Rust trait of the same name.
-private protocol FfiConverter {
+// Protocol for types that transfer other types across the FFI. This is
+// analogous to the Rust trait of the same name.
+fileprivate protocol FfiConverter {
     associatedtype FfiType
     associatedtype SwiftType
 
@@ -166,33 +212,33 @@ private protocol FfiConverter {
     static func write(_ value: SwiftType, into buf: inout [UInt8])
 }
 
-/// Types conforming to `Primitive` pass themselves directly over the FFI.
-private protocol FfiConverterPrimitive: FfiConverter where FfiType == SwiftType {}
+// Types conforming to `Primitive` pass themselves directly over the FFI.
+fileprivate protocol FfiConverterPrimitive: FfiConverter where FfiType == SwiftType { }
 
 extension FfiConverterPrimitive {
-    #if swift(>=5.8)
-        @_documentation(visibility: private)
-    #endif
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
     public static func lift(_ value: FfiType) throws -> SwiftType {
         return value
     }
 
-    #if swift(>=5.8)
-        @_documentation(visibility: private)
-    #endif
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
     public static func lower(_ value: SwiftType) -> FfiType {
         return value
     }
 }
 
-/// Types conforming to `FfiConverterRustBuffer` lift and lower into a `RustBuffer`.
-/// Used for complex types where it's hard to write a custom lift/lower.
-private protocol FfiConverterRustBuffer: FfiConverter where FfiType == RustBuffer {}
+// Types conforming to `FfiConverterRustBuffer` lift and lower into a `RustBuffer`.
+// Used for complex types where it's hard to write a custom lift/lower.
+fileprivate protocol FfiConverterRustBuffer: FfiConverter where FfiType == RustBuffer {}
 
 extension FfiConverterRustBuffer {
-    #if swift(>=5.8)
-        @_documentation(visibility: private)
-    #endif
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
     public static func lift(_ buf: RustBuffer) throws -> SwiftType {
         var reader = createReader(data: Data(rustBuffer: buf))
         let value = try read(from: &reader)
@@ -203,19 +249,18 @@ extension FfiConverterRustBuffer {
         return value
     }
 
-    #if swift(>=5.8)
-        @_documentation(visibility: private)
-    #endif
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
     public static func lower(_ value: SwiftType) -> RustBuffer {
-        var writer = createWriter()
-        write(value, into: &writer)
-        return RustBuffer(bytes: writer)
+          var writer = createWriter()
+          write(value, into: &writer)
+          return RustBuffer(bytes: writer)
     }
 }
-
-/// An error type for FFI errors. These errors occur at the UniFFI level, not
-/// the library level.
-private enum UniffiInternalError: LocalizedError {
+// An error type for FFI errors. These errors occur at the UniFFI level, not
+// the library level.
+fileprivate enum UniffiInternalError: LocalizedError {
     case bufferOverflow
     case incompleteData
     case unexpectedOptionalTag
@@ -226,7 +271,7 @@ private enum UniffiInternalError: LocalizedError {
     case unexpectedStaleHandle
     case rustPanic(_ message: String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .bufferOverflow: return "Reading the requested value would read past the end of the buffer"
         case .incompleteData: return "The buffer still has data after lifting its containing value"
@@ -241,24 +286,24 @@ private enum UniffiInternalError: LocalizedError {
     }
 }
 
-private extension NSLock {
+fileprivate extension NSLock {
     func withLock<T>(f: () throws -> T) rethrows -> T {
-        lock()
+        self.lock()
         defer { self.unlock() }
         return try f()
     }
 }
 
-private let CALL_SUCCESS: Int8 = 0
-private let CALL_ERROR: Int8 = 1
-private let CALL_UNEXPECTED_ERROR: Int8 = 2
-private let CALL_CANCELLED: Int8 = 3
+fileprivate let CALL_SUCCESS: Int8 = 0
+fileprivate let CALL_ERROR: Int8 = 1
+fileprivate let CALL_UNEXPECTED_ERROR: Int8 = 2
+fileprivate let CALL_CANCELLED: Int8 = 3
 
-private extension RustCallStatus {
+fileprivate extension RustCallStatus {
     init() {
         self.init(
             code: CALL_SUCCESS,
-            errorBuf: RustBuffer(
+            errorBuf: RustBuffer.init(
                 capacity: 0,
                 len: 0,
                 data: nil
@@ -274,8 +319,7 @@ private func rustCall<T>(_ callback: (UnsafeMutablePointer<RustCallStatus>) -> T
 
 private func rustCallWithError<T, E: Swift.Error>(
     _ errorHandler: @escaping (RustBuffer) throws -> E,
-    _ callback: (UnsafeMutablePointer<RustCallStatus>) -> T
-) throws -> T {
+    _ callback: (UnsafeMutablePointer<RustCallStatus>) -> T) throws -> T {
     try makeRustCall(callback, errorHandler: errorHandler)
 }
 
@@ -283,8 +327,8 @@ private func makeRustCall<T, E: Swift.Error>(
     _ callback: (UnsafeMutablePointer<RustCallStatus>) -> T,
     errorHandler: ((RustBuffer) throws -> E)?
 ) throws -> T {
-    uniffiEnsureInitialized()
-    var callStatus = RustCallStatus()
+    uniffiEnsureCooklangFindInitialized()
+    var callStatus = RustCallStatus.init()
     let returnedVal = callback(&callStatus)
     try uniffiCheckCallStatus(callStatus: callStatus, errorHandler: errorHandler)
     return returnedVal
@@ -295,44 +339,44 @@ private func uniffiCheckCallStatus<E: Swift.Error>(
     errorHandler: ((RustBuffer) throws -> E)?
 ) throws {
     switch callStatus.code {
-    case CALL_SUCCESS:
-        return
+        case CALL_SUCCESS:
+            return
 
-    case CALL_ERROR:
-        if let errorHandler = errorHandler {
-            throw try errorHandler(callStatus.errorBuf)
-        } else {
-            callStatus.errorBuf.deallocate()
-            throw UniffiInternalError.unexpectedRustCallError
-        }
+        case CALL_ERROR:
+            if let errorHandler = errorHandler {
+                throw try errorHandler(callStatus.errorBuf)
+            } else {
+                callStatus.errorBuf.deallocate()
+                throw UniffiInternalError.unexpectedRustCallError
+            }
 
-    case CALL_UNEXPECTED_ERROR:
-        // When the rust code sees a panic, it tries to construct a RustBuffer
-        // with the message.  But if that code panics, then it just sends back
-        // an empty buffer.
-        if callStatus.errorBuf.len > 0 {
-            throw try UniffiInternalError.rustPanic(FfiConverterString.lift(callStatus.errorBuf))
-        } else {
-            callStatus.errorBuf.deallocate()
-            throw UniffiInternalError.rustPanic("Rust panic")
-        }
+        case CALL_UNEXPECTED_ERROR:
+            // When the rust code sees a panic, it tries to construct a RustBuffer
+            // with the message.  But if that code panics, then it just sends back
+            // an empty buffer.
+            if callStatus.errorBuf.len > 0 {
+                throw UniffiInternalError.rustPanic(try FfiConverterString.lift(callStatus.errorBuf))
+            } else {
+                callStatus.errorBuf.deallocate()
+                throw UniffiInternalError.rustPanic("Rust panic")
+            }
 
-    case CALL_CANCELLED:
-        fatalError("Cancellation not supported yet")
+        case CALL_CANCELLED:
+            fatalError("Cancellation not supported yet")
 
-    default:
-        throw UniffiInternalError.unexpectedRustCallStatusCode
+        default:
+            throw UniffiInternalError.unexpectedRustCallStatusCode
     }
 }
 
 private func uniffiTraitInterfaceCall<T>(
     callStatus: UnsafeMutablePointer<RustCallStatus>,
     makeCall: () throws -> T,
-    writeReturn: (T) -> Void
+    writeReturn: (T) -> ()
 ) {
     do {
         try writeReturn(makeCall())
-    } catch {
+    } catch let error {
         callStatus.pointee.code = CALL_UNEXPECTED_ERROR
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
@@ -341,7 +385,7 @@ private func uniffiTraitInterfaceCall<T>(
 private func uniffiTraitInterfaceCallWithError<T, E>(
     callStatus: UnsafeMutablePointer<RustCallStatus>,
     makeCall: () throws -> T,
-    writeReturn: (T) -> Void,
+    writeReturn: (T) -> (),
     lowerError: (E) -> RustBuffer
 ) {
     do {
@@ -354,27 +398,46 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
 }
+// Initial value and increment amount for handles. 
+// These ensure that SWIFT handles always have the lowest bit set
+fileprivate let UNIFFI_HANDLEMAP_INITIAL: UInt64 = 1
+fileprivate let UNIFFI_HANDLEMAP_DELTA: UInt64 = 2
 
-private class UniffiHandleMap<T> {
-    private var map: [UInt64: T] = [:]
+fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
+    // All mutation happens with this lock held, which is why we implement @unchecked Sendable.
     private let lock = NSLock()
-    private var currentHandle: UInt64 = 1
+    private var map: [UInt64: T] = [:]
+    private var currentHandle: UInt64 = UNIFFI_HANDLEMAP_INITIAL
 
     func insert(obj: T) -> UInt64 {
         lock.withLock {
-            let handle = currentHandle
-            currentHandle += 1
-            map[handle] = obj
-            return handle
+            return doInsert(obj)
         }
     }
 
-    func get(handle: UInt64) throws -> T {
+    // Low-level insert function, this assumes `lock` is held.
+    private func doInsert(_ obj: T) -> UInt64 {
+        let handle = currentHandle
+        currentHandle += UNIFFI_HANDLEMAP_DELTA
+        map[handle] = obj
+        return handle
+    }
+
+     func get(handle: UInt64) throws -> T {
         try lock.withLock {
             guard let obj = map[handle] else {
                 throw UniffiInternalError.unexpectedStaleHandle
             }
             return obj
+        }
+    }
+
+     func clone(handle: UInt64) throws -> UInt64 {
+        try lock.withLock {
+            guard let obj = map[handle] else {
+                throw UniffiInternalError.unexpectedStaleHandle
+            }
+            return doInsert(obj)
         }
     }
 
@@ -389,76 +452,96 @@ private class UniffiHandleMap<T> {
     }
 
     var count: Int {
-        map.count
+        get {
+            map.count
+        }
     }
 }
+
 
 // Public interface members begin here.
 
+
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-private struct FfiConverterUInt32: FfiConverterPrimitive {
+fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
         return try lift(readInt(&buf))
     }
 
-    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         writeInt(&buf, lower(value))
     }
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-private struct FfiConverterInt64: FfiConverterPrimitive {
+fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
     typealias FfiType = Int64
     typealias SwiftType = Int64
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int64 {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int64 {
         return try lift(readInt(&buf))
     }
 
-    static func write(_ value: Int64, into buf: inout [UInt8]) {
+    public static func write(_ value: Int64, into buf: inout [UInt8]) {
         writeInt(&buf, lower(value))
     }
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-private struct FfiConverterBool: FfiConverter {
+fileprivate struct FfiConverterDouble: FfiConverterPrimitive {
+    typealias FfiType = Double
+    typealias SwiftType = Double
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Double {
+        return try lift(readDouble(&buf))
+    }
+
+    public static func write(_ value: Double, into buf: inout [UInt8]) {
+        writeDouble(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
 
-    static func lift(_ value: Int8) throws -> Bool {
+    public static func lift(_ value: Int8) throws -> Bool {
         return value != 0
     }
 
-    static func lower(_ value: Bool) -> Int8 {
+    public static func lower(_ value: Bool) -> Int8 {
         return value ? 1 : 0
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Bool {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Bool {
         return try lift(readInt(&buf))
     }
 
-    static func write(_ value: Bool, into buf: inout [UInt8]) {
+    public static func write(_ value: Bool, into buf: inout [UInt8]) {
         writeInt(&buf, lower(value))
     }
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-private struct FfiConverterString: FfiConverter {
+fileprivate struct FfiConverterString: FfiConverter {
     typealias SwiftType = String
     typealias FfiType = RustBuffer
 
-    static func lift(_ value: RustBuffer) throws -> String {
+    public static func lift(_ value: RustBuffer) throws -> String {
         defer {
             value.deallocate()
         }
@@ -466,10 +549,14 @@ private struct FfiConverterString: FfiConverter {
             return String()
         }
         let bytes = UnsafeBufferPointer<UInt8>(start: value.data!, count: Int(value.len))
-        return String(bytes: bytes, encoding: String.Encoding.utf8)!
+        // Use Swift's native UTF-8 decoder; `String(bytes:encoding:.utf8)` goes
+        // through Foundation's NSString and silently strips a leading U+FEFF BOM.
+        // Invalid UTF-8 substitutes U+FFFD instead of trapping (unreachable
+        // given Rust's `String` invariant).
+        return String(decoding: bytes, as: UTF8.self)
     }
 
-    static func lower(_ value: String) -> RustBuffer {
+    public static func lower(_ value: String) -> RustBuffer {
         return value.utf8CString.withUnsafeBufferPointer { ptr in
             // The swift string gives us int8_t, we want uint8_t.
             ptr.withMemoryRebound(to: UInt8.self) { ptr in
@@ -480,505 +567,927 @@ private struct FfiConverterString: FfiConverter {
         }
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> String {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> String {
         let len: Int32 = try readInt(&buf)
-        return try String(bytes: readBytes(&buf, count: Int(len)), encoding: String.Encoding.utf8)!
+        // See `lift` above for why we avoid Foundation's NSString-backed decoder here.
+        return String(decoding: try readBytes(&buf, count: Int(len)), as: UTF8.self)
     }
 
-    static func write(_ value: String, into buf: inout [UInt8]) {
+    public static func write(_ value: String, into buf: inout [UInt8]) {
         let len = Int32(value.utf8.count)
         writeInt(&buf, len)
         writeBytes(&buf, value.utf8)
     }
 }
 
+
+
+
 /**
  * FFI-safe representation of a recipe entry.
  *
  * This is the main type for representing recipes across the FFI boundary.
  */
-public protocol FfiRecipeEntryProtocol: AnyObject {
+public protocol FfiRecipeEntryProtocol: AnyObject, Sendable {
+    
     /**
      * Returns the full content of the recipe.
      */
-    func content() throws -> String
-
+    func content() throws  -> String
+    
     /**
      * Returns the file name if this recipe is backed by a file.
      */
-    func fileName() -> String?
-
+    func fileName()  -> String?
+    
     /**
      * Gets a specific metadata value by key as a JSON string.
      */
-    func getMetadataValue(key: String) -> String?
-
+    func getMetadataValue(key: String)  -> String?
+    
     /**
      * Gets a step image by section and step number.
      *
      * For linear recipes (no sections), use section = 0.
      * Steps are one-indexed (first step is 1).
      */
-    func getStepImage(section: UInt32, step: UInt32) -> String?
-
+    func getStepImage(section: UInt32, step: UInt32)  -> String?
+    
     /**
      * Returns true if this is a menu file (.menu) rather than a recipe (.cook).
      */
-    func isMenu() -> Bool
-
+    func isMenu()  -> Bool
+    
     /**
      * Returns the recipe's metadata.
      */
-    func metadata() -> FfiMetadata
-
+    func metadata()  -> FfiMetadata
+    
     /**
      * Returns the name of the recipe.
      */
-    func name() -> String?
-
+    func name()  -> String?
+    
     /**
      * Returns the file path if this recipe is backed by a file.
      */
-    func path() -> String?
-
+    func path()  -> String?
+    
     /**
      * Returns all file paths related to this recipe.
      *
      * Includes images, referenced recipe files, and recursively
      * related files of referenced recipes.
      */
-    func relatedFiles() -> [String]
-
+    func relatedFiles()  -> [String]
+    
     /**
      * Returns all step images for the recipe.
      */
-    func stepImages() -> FfiStepImages
-
+    func stepImages()  -> FfiStepImages
+    
     /**
      * Returns the recipe's tags.
      */
-    func tags() -> [String]
-
+    func tags()  -> [String]
+    
     /**
      * Returns the URL or path to the recipe's title image.
      */
-    func titleImage() -> String?
+    func titleImage()  -> String?
+    
 }
-
 /**
  * FFI-safe representation of a recipe entry.
  *
  * This is the main type for representing recipes across the FFI boundary.
  */
-open class FfiRecipeEntry:
-    FfiRecipeEntryProtocol
-{
-    fileprivate let pointer: UnsafeMutableRawPointer!
+open class FfiRecipeEntry: FfiRecipeEntryProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
-    #if swift(>=5.8)
-        @_documentation(visibility: private)
-    #endif
-    public struct NoPointer {
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
         public init() {}
     }
 
     // TODO: We'd like this to be `private` but for Swifty reasons,
     // we can't implement `FfiConverter` without making this `required` and we can't
     // make it `required` without making it `public`.
-    public required init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
-    #if swift(>=5.8)
-        @_documentation(visibility: private)
-    #endif
-    public init(noPointer _: NoPointer) {
-        pointer = nil
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
-    #if swift(>=5.8)
-        @_documentation(visibility: private)
-    #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_cooklang_find_fn_clone_ffirecipeentry(self.pointer, $0) }
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_cooklang_find_fn_clone_ffirecipeentry(self.handle, $0) }
     }
-
     // No primary constructor declared for this class.
 
     deinit {
-        guard let pointer = pointer else {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
             return
         }
 
-        try! rustCall { uniffi_cooklang_find_fn_free_ffirecipeentry(pointer, $0) }
+        try! rustCall { uniffi_cooklang_find_fn_free_ffirecipeentry(handle, $0) }
     }
 
+    
+
+    
     /**
      * Returns the full content of the recipe.
      */
-    open func content() throws -> String {
-        return try FfiConverterString.lift(rustCallWithError(FfiConverterTypeCooklangError.lift) {
-            uniffi_cooklang_find_fn_method_ffirecipeentry_content(self.uniffiClonePointer(), $0)
-        })
-    }
-
+open func content()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCooklangError_lift) {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipeentry_content(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Returns the file name if this recipe is backed by a file.
      */
-    open func fileName() -> String? {
-        return try! FfiConverterOptionString.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipeentry_file_name(self.uniffiClonePointer(), $0)
-        })
-    }
-
+open func fileName() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipeentry_file_name(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Gets a specific metadata value by key as a JSON string.
      */
-    open func getMetadataValue(key: String) -> String? {
-        return try! FfiConverterOptionString.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipeentry_get_metadata_value(self.uniffiClonePointer(),
-                                                                             FfiConverterString.lower(key), $0)
-        })
-    }
-
+open func getMetadataValue(key: String) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipeentry_get_metadata_value(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(key),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Gets a step image by section and step number.
      *
      * For linear recipes (no sections), use section = 0.
      * Steps are one-indexed (first step is 1).
      */
-    open func getStepImage(section: UInt32, step: UInt32) -> String? {
-        return try! FfiConverterOptionString.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipeentry_get_step_image(self.uniffiClonePointer(),
-                                                                         FfiConverterUInt32.lower(section),
-                                                                         FfiConverterUInt32.lower(step), $0)
-        })
-    }
-
+open func getStepImage(section: UInt32, step: UInt32) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipeentry_get_step_image(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(section),
+        FfiConverterUInt32.lower(step),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Returns true if this is a menu file (.menu) rather than a recipe (.cook).
      */
-    open func isMenu() -> Bool {
-        return try! FfiConverterBool.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipeentry_is_menu(self.uniffiClonePointer(), $0)
-        })
-    }
-
+open func isMenu() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipeentry_is_menu(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Returns the recipe's metadata.
      */
-    open func metadata() -> FfiMetadata {
-        return try! FfiConverterTypeFfiMetadata.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipeentry_metadata(self.uniffiClonePointer(), $0)
-        })
-    }
-
+open func metadata() -> FfiMetadata  {
+    return try!  FfiConverterTypeFfiMetadata_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipeentry_metadata(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Returns the name of the recipe.
      */
-    open func name() -> String? {
-        return try! FfiConverterOptionString.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipeentry_name(self.uniffiClonePointer(), $0)
-        })
-    }
-
+open func name() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipeentry_name(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Returns the file path if this recipe is backed by a file.
      */
-    open func path() -> String? {
-        return try! FfiConverterOptionString.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipeentry_path(self.uniffiClonePointer(), $0)
-        })
-    }
-
+open func path() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipeentry_path(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Returns all file paths related to this recipe.
      *
      * Includes images, referenced recipe files, and recursively
      * related files of referenced recipes.
      */
-    open func relatedFiles() -> [String] {
-        return try! FfiConverterSequenceString.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipeentry_related_files(self.uniffiClonePointer(), $0)
-        })
-    }
-
+open func relatedFiles() -> [String]  {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipeentry_related_files(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Returns all step images for the recipe.
      */
-    open func stepImages() -> FfiStepImages {
-        return try! FfiConverterTypeFfiStepImages.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipeentry_step_images(self.uniffiClonePointer(), $0)
-        })
-    }
-
+open func stepImages() -> FfiStepImages  {
+    return try!  FfiConverterTypeFfiStepImages_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipeentry_step_images(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Returns the recipe's tags.
      */
-    open func tags() -> [String] {
-        return try! FfiConverterSequenceString.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipeentry_tags(self.uniffiClonePointer(), $0)
-        })
-    }
-
+open func tags() -> [String]  {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipeentry_tags(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Returns the URL or path to the recipe's title image.
      */
-    open func titleImage() -> String? {
-        return try! FfiConverterOptionString.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipeentry_title_image(self.uniffiClonePointer(), $0)
-        })
-    }
+open func titleImage() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipeentry_title_image(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+
+    
 }
 
+
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeFfiRecipeEntry: FfiConverter {
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = FfiRecipeEntry
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> FfiRecipeEntry {
-        return FfiRecipeEntry(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> FfiRecipeEntry {
+        return FfiRecipeEntry(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: FfiRecipeEntry) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: FfiRecipeEntry) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiRecipeEntry {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if ptr == nil {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: FfiRecipeEntry, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
+
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFfiRecipeEntry_lift(_ pointer: UnsafeMutableRawPointer) throws -> FfiRecipeEntry {
-    return try FfiConverterTypeFfiRecipeEntry.lift(pointer)
+public func FfiConverterTypeFfiRecipeEntry_lift(_ handle: UInt64) throws -> FfiRecipeEntry {
+    return try FfiConverterTypeFfiRecipeEntry.lift(handle)
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFfiRecipeEntry_lower(_ value: FfiRecipeEntry) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeFfiRecipeEntry_lower(_ value: FfiRecipeEntry) -> UInt64 {
     return FfiConverterTypeFfiRecipeEntry.lower(value)
 }
 
+
+
+
+
+
 /**
  * FFI-safe representation of a recipe tree.
  */
-public protocol FfiRecipeTreeProtocol: AnyObject {
+public protocol FfiRecipeTreeProtocol: AnyObject, Sendable {
+    
     /**
      * Returns all nodes in the tree as a flat list.
      */
-    func allNodes() -> [FfiTreeNode]
-
+    func allNodes()  -> [FfiTreeNode]
+    
     /**
      * Returns all recipes in the tree.
      */
-    func allRecipes() -> [FfiRecipeEntry]
-
+    func allRecipes()  -> [FfiRecipeEntry]
+    
     /**
      * Gets a child node by name from the root.
      */
-    func getChild(name: String) -> FfiTreeNode?
-
+    func getChild(name: String)  -> FfiTreeNode?
+    
     /**
      * Gets a recipe by path components (e.g., ["breakfast", "pancakes"]).
      */
-    func getRecipeAtPath(path: [String]) -> FfiRecipeEntry?
-
+    func getRecipeAtPath(path: [String])  -> FfiRecipeEntry?
+    
     /**
      * Gets the recipe at the root level if present.
      */
-    func recipe() -> FfiRecipeEntry?
-
+    func recipe()  -> FfiRecipeEntry?
+    
     /**
      * Returns the root node information.
      */
-    func root() -> FfiTreeNode
+    func root()  -> FfiTreeNode
+    
 }
-
 /**
  * FFI-safe representation of a recipe tree.
  */
-open class FfiRecipeTree:
-    FfiRecipeTreeProtocol
-{
-    fileprivate let pointer: UnsafeMutableRawPointer!
+open class FfiRecipeTree: FfiRecipeTreeProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
 
-    // Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
-    #if swift(>=5.8)
-        @_documentation(visibility: private)
-    #endif
-    public struct NoPointer {
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
         public init() {}
     }
 
     // TODO: We'd like this to be `private` but for Swifty reasons,
     // we can't implement `FfiConverter` without making this `required` and we can't
     // make it `required` without making it `public`.
-    public required init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
-    #if swift(>=5.8)
-        @_documentation(visibility: private)
-    #endif
-    public init(noPointer _: NoPointer) {
-        pointer = nil
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
-    #if swift(>=5.8)
-        @_documentation(visibility: private)
-    #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_cooklang_find_fn_clone_ffirecipetree(self.pointer, $0) }
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_cooklang_find_fn_clone_ffirecipetree(self.handle, $0) }
     }
-
     // No primary constructor declared for this class.
 
     deinit {
-        guard let pointer = pointer else {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
             return
         }
 
-        try! rustCall { uniffi_cooklang_find_fn_free_ffirecipetree(pointer, $0) }
+        try! rustCall { uniffi_cooklang_find_fn_free_ffirecipetree(handle, $0) }
     }
 
+    
+
+    
     /**
      * Returns all nodes in the tree as a flat list.
      */
-    open func allNodes() -> [FfiTreeNode] {
-        return try! FfiConverterSequenceTypeFfiTreeNode.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipetree_all_nodes(self.uniffiClonePointer(), $0)
-        })
-    }
-
+open func allNodes() -> [FfiTreeNode]  {
+    return try!  FfiConverterSequenceTypeFfiTreeNode.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipetree_all_nodes(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Returns all recipes in the tree.
      */
-    open func allRecipes() -> [FfiRecipeEntry] {
-        return try! FfiConverterSequenceTypeFfiRecipeEntry.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipetree_all_recipes(self.uniffiClonePointer(), $0)
-        })
-    }
-
+open func allRecipes() -> [FfiRecipeEntry]  {
+    return try!  FfiConverterSequenceTypeFfiRecipeEntry.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipetree_all_recipes(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Gets a child node by name from the root.
      */
-    open func getChild(name: String) -> FfiTreeNode? {
-        return try! FfiConverterOptionTypeFfiTreeNode.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipetree_get_child(self.uniffiClonePointer(),
-                                                                   FfiConverterString.lower(name), $0)
-        })
-    }
-
+open func getChild(name: String) -> FfiTreeNode?  {
+    return try!  FfiConverterOptionTypeFfiTreeNode.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipetree_get_child(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(name),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Gets a recipe by path components (e.g., ["breakfast", "pancakes"]).
      */
-    open func getRecipeAtPath(path: [String]) -> FfiRecipeEntry? {
-        return try! FfiConverterOptionTypeFfiRecipeEntry.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipetree_get_recipe_at_path(self.uniffiClonePointer(),
-                                                                            FfiConverterSequenceString.lower(path), $0)
-        })
-    }
-
+open func getRecipeAtPath(path: [String]) -> FfiRecipeEntry?  {
+    return try!  FfiConverterOptionTypeFfiRecipeEntry.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipetree_get_recipe_at_path(
+            self.uniffiCloneHandle(),
+        FfiConverterSequenceString.lower(path),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Gets the recipe at the root level if present.
      */
-    open func recipe() -> FfiRecipeEntry? {
-        return try! FfiConverterOptionTypeFfiRecipeEntry.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipetree_recipe(self.uniffiClonePointer(), $0)
-        })
-    }
-
+open func recipe() -> FfiRecipeEntry?  {
+    return try!  FfiConverterOptionTypeFfiRecipeEntry.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipetree_recipe(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Returns the root node information.
      */
-    open func root() -> FfiTreeNode {
-        return try! FfiConverterTypeFfiTreeNode.lift(try! rustCall {
-            uniffi_cooklang_find_fn_method_ffirecipetree_root(self.uniffiClonePointer(), $0)
-        })
-    }
+open func root() -> FfiTreeNode  {
+    return try!  FfiConverterTypeFfiTreeNode_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipetree_root(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+
+    
 }
 
+
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeFfiRecipeTree: FfiConverter {
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = FfiRecipeTree
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> FfiRecipeTree {
-        return FfiRecipeTree(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> FfiRecipeTree {
+        return FfiRecipeTree(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: FfiRecipeTree) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: FfiRecipeTree) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiRecipeTree {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if ptr == nil {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: FfiRecipeTree, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
+
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFfiRecipeTree_lift(_ pointer: UnsafeMutableRawPointer) throws -> FfiRecipeTree {
-    return try FfiConverterTypeFfiRecipeTree.lift(pointer)
+public func FfiConverterTypeFfiRecipeTree_lift(_ handle: UInt64) throws -> FfiRecipeTree {
+    return try FfiConverterTypeFfiRecipeTree.lift(handle)
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-public func FfiConverterTypeFfiRecipeTree_lower(_ value: FfiRecipeTree) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeFfiRecipeTree_lower(_ value: FfiRecipeTree) -> UInt64 {
     return FfiConverterTypeFfiRecipeTree.lower(value)
 }
+
+
+
+
+/**
+ * FFI-safe representation of a one-level directory listing.
+ */
+public struct FfiDirListing {
+    /**
+     * The directory that was listed
+     */
+    public let path: String
+    /**
+     * Its recipes and subfolders, sorted by file name
+     */
+    public let entries: [FfiDirEntry]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The directory that was listed
+         */path: String, 
+        /**
+         * Its recipes and subfolders, sorted by file name
+         */entries: [FfiDirEntry]) {
+        self.path = path
+        self.entries = entries
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiDirListing: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDirListing: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDirListing {
+        return
+            try FfiDirListing(
+                path: FfiConverterString.read(from: &buf), 
+                entries: FfiConverterSequenceTypeFfiDirEntry.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiDirListing, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.path, into: &buf)
+        FfiConverterSequenceTypeFfiDirEntry.write(value.entries, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDirListing_lift(_ buf: RustBuffer) throws -> FfiDirListing {
+    return try FfiConverterTypeFfiDirListing.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDirListing_lower(_ value: FfiDirListing) -> RustBuffer {
+    return FfiConverterTypeFfiDirListing.lower(value)
+}
+
+
+/**
+ * FFI-safe representation of a parsed `.menu` file.
+ */
+public struct FfiMenu: Equatable, Hashable {
+    /**
+     * Frontmatter title, else the file name
+     */
+    public let name: String
+    /**
+     * Menu frontmatter
+     */
+    public let metadata: FfiMetadata
+    /**
+     * Sections (usually days) in file order
+     */
+    public let sections: [FfiMenuSection]
+    /**
+     * Distinct section dates in file order
+     */
+    public let dates: [String]
+    /**
+     * Earliest section date
+     */
+    public let firstDate: String?
+    /**
+     * Latest section date
+     */
+    public let lastDate: String?
+    /**
+     * Recipe references, deduplicated by path, in first-seen order.
+     *
+     * Each path keeps its first occurrence's quantity and scale. Iterate
+     * `sections` for every occurrence's own scale (e.g. shopping lists).
+     */
+    public let recipeReferences: [FfiMenuItem]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Frontmatter title, else the file name
+         */name: String, 
+        /**
+         * Menu frontmatter
+         */metadata: FfiMetadata, 
+        /**
+         * Sections (usually days) in file order
+         */sections: [FfiMenuSection], 
+        /**
+         * Distinct section dates in file order
+         */dates: [String], 
+        /**
+         * Earliest section date
+         */firstDate: String?, 
+        /**
+         * Latest section date
+         */lastDate: String?, 
+        /**
+         * Recipe references, deduplicated by path, in first-seen order.
+         *
+         * Each path keeps its first occurrence's quantity and scale. Iterate
+         * `sections` for every occurrence's own scale (e.g. shopping lists).
+         */recipeReferences: [FfiMenuItem]) {
+        self.name = name
+        self.metadata = metadata
+        self.sections = sections
+        self.dates = dates
+        self.firstDate = firstDate
+        self.lastDate = lastDate
+        self.recipeReferences = recipeReferences
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiMenu: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiMenu: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMenu {
+        return
+            try FfiMenu(
+                name: FfiConverterString.read(from: &buf), 
+                metadata: FfiConverterTypeFfiMetadata.read(from: &buf), 
+                sections: FfiConverterSequenceTypeFfiMenuSection.read(from: &buf), 
+                dates: FfiConverterSequenceString.read(from: &buf), 
+                firstDate: FfiConverterOptionString.read(from: &buf), 
+                lastDate: FfiConverterOptionString.read(from: &buf), 
+                recipeReferences: FfiConverterSequenceTypeFfiMenuItem.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiMenu, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterTypeFfiMetadata.write(value.metadata, into: &buf)
+        FfiConverterSequenceTypeFfiMenuSection.write(value.sections, into: &buf)
+        FfiConverterSequenceString.write(value.dates, into: &buf)
+        FfiConverterOptionString.write(value.firstDate, into: &buf)
+        FfiConverterOptionString.write(value.lastDate, into: &buf)
+        FfiConverterSequenceTypeFfiMenuItem.write(value.recipeReferences, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMenu_lift(_ buf: RustBuffer) throws -> FfiMenu {
+    return try FfiConverterTypeFfiMenu.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMenu_lower(_ value: FfiMenu) -> RustBuffer {
+    return FfiConverterTypeFfiMenu.lower(value)
+}
+
+
+/**
+ * A meal within a menu section.
+ */
+public struct FfiMenuMeal: Equatable, Hashable {
+    /**
+     * e.g. "Breakfast"; `None` for items before the first meal heading
+     */
+    public let mealType: String?
+    /**
+     * Time as written, `H:MM` or `HH:MM`, from a heading like `Breakfast (08:30):`
+     */
+    public let time: String?
+    /**
+     * Items in file order
+     */
+    public let items: [FfiMenuItem]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * e.g. "Breakfast"; `None` for items before the first meal heading
+         */mealType: String?, 
+        /**
+         * Time as written, `H:MM` or `HH:MM`, from a heading like `Breakfast (08:30):`
+         */time: String?, 
+        /**
+         * Items in file order
+         */items: [FfiMenuItem]) {
+        self.mealType = mealType
+        self.time = time
+        self.items = items
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiMenuMeal: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiMenuMeal: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMenuMeal {
+        return
+            try FfiMenuMeal(
+                mealType: FfiConverterOptionString.read(from: &buf), 
+                time: FfiConverterOptionString.read(from: &buf), 
+                items: FfiConverterSequenceTypeFfiMenuItem.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiMenuMeal, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.mealType, into: &buf)
+        FfiConverterOptionString.write(value.time, into: &buf)
+        FfiConverterSequenceTypeFfiMenuItem.write(value.items, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMenuMeal_lift(_ buf: RustBuffer) throws -> FfiMenuMeal {
+    return try FfiConverterTypeFfiMenuMeal.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMenuMeal_lower(_ value: FfiMenuMeal) -> RustBuffer {
+    return FfiConverterTypeFfiMenuMeal.lower(value)
+}
+
+
+/**
+ * A section (usually a day) of a menu.
+ */
+public struct FfiMenuSection: Equatable, Hashable {
+    /**
+     * Header text; `None` for content before the first header
+     */
+    public let name: String?
+    /**
+     * First `YYYY-MM-DD` in the header
+     */
+    public let date: String?
+    /**
+     * Meals in file order
+     */
+    public let meals: [FfiMenuMeal]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Header text; `None` for content before the first header
+         */name: String?, 
+        /**
+         * First `YYYY-MM-DD` in the header
+         */date: String?, 
+        /**
+         * Meals in file order
+         */meals: [FfiMenuMeal]) {
+        self.name = name
+        self.date = date
+        self.meals = meals
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiMenuSection: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiMenuSection: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMenuSection {
+        return
+            try FfiMenuSection(
+                name: FfiConverterOptionString.read(from: &buf), 
+                date: FfiConverterOptionString.read(from: &buf), 
+                meals: FfiConverterSequenceTypeFfiMenuMeal.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiMenuSection, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.name, into: &buf)
+        FfiConverterOptionString.write(value.date, into: &buf)
+        FfiConverterSequenceTypeFfiMenuMeal.write(value.meals, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMenuSection_lift(_ buf: RustBuffer) throws -> FfiMenuSection {
+    return try FfiConverterTypeFfiMenuSection.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMenuSection_lower(_ value: FfiMenuSection) -> RustBuffer {
+    return FfiConverterTypeFfiMenuSection.lower(value)
+}
+
 
 /**
  * FFI-safe representation of recipe metadata.
  */
-public struct FfiMetadata {
+public struct FfiMetadata: Equatable, Hashable {
     /**
      * Recipe title if present
      */
@@ -1000,75 +1509,53 @@ public struct FfiMetadata {
      */
     public let rawJson: String
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(
-        /* 
+        /**
          * Recipe title if present
-         */ title: String?,
-        /* 
-            * Number of servings if present
-            */ servings: Int64?,
-        /* 
-            * List of tags
-            */ tags: [String],
-        /* 
-            * Primary image URL if present
-            */ imageUrl: String?,
-        /* 
-            * All metadata as JSON string for complex access
-            */ rawJson: String
-    ) {
+         */title: String?, 
+        /**
+         * Number of servings if present
+         */servings: Int64?, 
+        /**
+         * List of tags
+         */tags: [String], 
+        /**
+         * Primary image URL if present
+         */imageUrl: String?, 
+        /**
+         * All metadata as JSON string for complex access
+         */rawJson: String) {
         self.title = title
         self.servings = servings
         self.tags = tags
         self.imageUrl = imageUrl
         self.rawJson = rawJson
     }
+
+    
+
+    
 }
 
-extension FfiMetadata: Equatable, Hashable {
-    public static func == (lhs: FfiMetadata, rhs: FfiMetadata) -> Bool {
-        if lhs.title != rhs.title {
-            return false
-        }
-        if lhs.servings != rhs.servings {
-            return false
-        }
-        if lhs.tags != rhs.tags {
-            return false
-        }
-        if lhs.imageUrl != rhs.imageUrl {
-            return false
-        }
-        if lhs.rawJson != rhs.rawJson {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(title)
-        hasher.combine(servings)
-        hasher.combine(tags)
-        hasher.combine(imageUrl)
-        hasher.combine(rawJson)
-    }
-}
+#if compiler(>=6)
+extension FfiMetadata: Sendable {}
+#endif
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeFfiMetadata: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMetadata {
         return
             try FfiMetadata(
-                title: FfiConverterOptionString.read(from: &buf),
-                servings: FfiConverterOptionInt64.read(from: &buf),
-                tags: FfiConverterSequenceString.read(from: &buf),
-                imageUrl: FfiConverterOptionString.read(from: &buf),
+                title: FfiConverterOptionString.read(from: &buf), 
+                servings: FfiConverterOptionInt64.read(from: &buf), 
+                tags: FfiConverterSequenceString.read(from: &buf), 
+                imageUrl: FfiConverterOptionString.read(from: &buf), 
                 rawJson: FfiConverterString.read(from: &buf)
-            )
+        )
     }
 
     public static func write(_ value: FfiMetadata, into buf: inout [UInt8]) {
@@ -1080,24 +1567,26 @@ public struct FfiConverterTypeFfiMetadata: FfiConverterRustBuffer {
     }
 }
 
+
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public func FfiConverterTypeFfiMetadata_lift(_ buf: RustBuffer) throws -> FfiMetadata {
     return try FfiConverterTypeFfiMetadata.lift(buf)
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public func FfiConverterTypeFfiMetadata_lower(_ value: FfiMetadata) -> RustBuffer {
     return FfiConverterTypeFfiMetadata.lower(value)
 }
 
+
 /**
  * FFI-safe representation of step images.
  */
-public struct FfiStepImages {
+public struct FfiStepImages: Equatable, Hashable {
     /**
      * List of all step images
      */
@@ -1107,48 +1596,38 @@ public struct FfiStepImages {
      */
     public let count: UInt32
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(
-        /* 
+        /**
          * List of all step images
-         */ images: [StepImageEntry],
-        /* 
-            * Total count of images
-            */ count: UInt32
-    ) {
+         */images: [StepImageEntry], 
+        /**
+         * Total count of images
+         */count: UInt32) {
         self.images = images
         self.count = count
     }
+
+    
+
+    
 }
 
-extension FfiStepImages: Equatable, Hashable {
-    public static func == (lhs: FfiStepImages, rhs: FfiStepImages) -> Bool {
-        if lhs.images != rhs.images {
-            return false
-        }
-        if lhs.count != rhs.count {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(images)
-        hasher.combine(count)
-    }
-}
+#if compiler(>=6)
+extension FfiStepImages: Sendable {}
+#endif
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeFfiStepImages: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiStepImages {
         return
             try FfiStepImages(
-                images: FfiConverterSequenceTypeStepImageEntry.read(from: &buf),
+                images: FfiConverterSequenceTypeStepImageEntry.read(from: &buf), 
                 count: FfiConverterUInt32.read(from: &buf)
-            )
+        )
     }
 
     public static func write(_ value: FfiStepImages, into buf: inout [UInt8]) {
@@ -1157,24 +1636,26 @@ public struct FfiConverterTypeFfiStepImages: FfiConverterRustBuffer {
     }
 }
 
+
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public func FfiConverterTypeFfiStepImages_lift(_ buf: RustBuffer) throws -> FfiStepImages {
     return try FfiConverterTypeFfiStepImages.lift(buf)
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public func FfiConverterTypeFfiStepImages_lower(_ value: FfiStepImages) -> RustBuffer {
     return FfiConverterTypeFfiStepImages.lower(value)
 }
 
+
 /**
  * FFI-safe representation of a tree node.
  */
-public struct FfiTreeNode {
+public struct FfiTreeNode: Equatable, Hashable {
     /**
      * Name of the node (directory or recipe name)
      */
@@ -1199,78 +1680,56 @@ public struct FfiTreeNode {
      */
     public let recipeCount: UInt32
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(
-        /* 
+        /**
          * Name of the node (directory or recipe name)
-         */ name: String,
-        /* 
-            * Full path to this node
-            */ path: String,
-        /* 
-            * True if this node has a recipe
-            */ hasRecipe: Bool,
-        /* 
-            * Names of child nodes
-            */ children: [String],
-        /* 
-            * Number of recipes in this subtree, however deeply nested.
-            *
-            * A recipe node reports `1`; a directory node reports every recipe it
-            * holds, including those in its subdirectories.
-            */ recipeCount: UInt32
-    ) {
+         */name: String, 
+        /**
+         * Full path to this node
+         */path: String, 
+        /**
+         * True if this node has a recipe
+         */hasRecipe: Bool, 
+        /**
+         * Names of child nodes
+         */children: [String], 
+        /**
+         * Number of recipes in this subtree, however deeply nested.
+         *
+         * A recipe node reports `1`; a directory node reports every recipe it
+         * holds, including those in its subdirectories.
+         */recipeCount: UInt32) {
         self.name = name
         self.path = path
         self.hasRecipe = hasRecipe
         self.children = children
         self.recipeCount = recipeCount
     }
+
+    
+
+    
 }
 
-extension FfiTreeNode: Equatable, Hashable {
-    public static func == (lhs: FfiTreeNode, rhs: FfiTreeNode) -> Bool {
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.path != rhs.path {
-            return false
-        }
-        if lhs.hasRecipe != rhs.hasRecipe {
-            return false
-        }
-        if lhs.children != rhs.children {
-            return false
-        }
-        if lhs.recipeCount != rhs.recipeCount {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(name)
-        hasher.combine(path)
-        hasher.combine(hasRecipe)
-        hasher.combine(children)
-        hasher.combine(recipeCount)
-    }
-}
+#if compiler(>=6)
+extension FfiTreeNode: Sendable {}
+#endif
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeFfiTreeNode: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTreeNode {
         return
             try FfiTreeNode(
-                name: FfiConverterString.read(from: &buf),
-                path: FfiConverterString.read(from: &buf),
-                hasRecipe: FfiConverterBool.read(from: &buf),
-                children: FfiConverterSequenceString.read(from: &buf),
+                name: FfiConverterString.read(from: &buf), 
+                path: FfiConverterString.read(from: &buf), 
+                hasRecipe: FfiConverterBool.read(from: &buf), 
+                children: FfiConverterSequenceString.read(from: &buf), 
                 recipeCount: FfiConverterUInt32.read(from: &buf)
-            )
+        )
     }
 
     public static func write(_ value: FfiTreeNode, into buf: inout [UInt8]) {
@@ -1282,62 +1741,55 @@ public struct FfiConverterTypeFfiTreeNode: FfiConverterRustBuffer {
     }
 }
 
+
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public func FfiConverterTypeFfiTreeNode_lift(_ buf: RustBuffer) throws -> FfiTreeNode {
     return try FfiConverterTypeFfiTreeNode.lift(buf)
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public func FfiConverterTypeFfiTreeNode_lower(_ value: FfiTreeNode) -> RustBuffer {
     return FfiConverterTypeFfiTreeNode.lower(value)
 }
 
+
 /**
  * A key-value pair for metadata entries.
  */
-public struct MetadataEntry {
+public struct MetadataEntry: Equatable, Hashable {
     public let key: String
     public let value: String
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(key: String, value: String) {
         self.key = key
         self.value = value
     }
+
+    
+
+    
 }
 
-extension MetadataEntry: Equatable, Hashable {
-    public static func == (lhs: MetadataEntry, rhs: MetadataEntry) -> Bool {
-        if lhs.key != rhs.key {
-            return false
-        }
-        if lhs.value != rhs.value {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(key)
-        hasher.combine(value)
-    }
-}
+#if compiler(>=6)
+extension MetadataEntry: Sendable {}
+#endif
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeMetadataEntry: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MetadataEntry {
         return
             try MetadataEntry(
-                key: FfiConverterString.read(from: &buf),
+                key: FfiConverterString.read(from: &buf), 
                 value: FfiConverterString.read(from: &buf)
-            )
+        )
     }
 
     public static func write(_ value: MetadataEntry, into buf: inout [UInt8]) {
@@ -1346,24 +1798,26 @@ public struct FfiConverterTypeMetadataEntry: FfiConverterRustBuffer {
     }
 }
 
+
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public func FfiConverterTypeMetadataEntry_lift(_ buf: RustBuffer) throws -> MetadataEntry {
     return try FfiConverterTypeMetadataEntry.lift(buf)
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public func FfiConverterTypeMetadataEntry_lower(_ value: MetadataEntry) -> RustBuffer {
     return FfiConverterTypeMetadataEntry.lower(value)
 }
 
+
 /**
  * A step image entry mapping section and step to an image path.
  */
-public struct StepImageEntry {
+public struct StepImageEntry: Equatable, Hashable {
     /**
      * Section number (0 for linear recipes, 1+ for sectioned recipes)
      */
@@ -1377,57 +1831,43 @@ public struct StepImageEntry {
      */
     public let imagePath: String
 
-    /// Default memberwise initializers are never public by default, so we
-    /// declare one manually.
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
     public init(
-        /* 
+        /**
          * Section number (0 for linear recipes, 1+ for sectioned recipes)
-         */ section: UInt32,
-        /* 
-            * Step number (1-indexed)
-            */ step: UInt32,
-        /* 
-            * Path to the image
-            */ imagePath: String
-    ) {
+         */section: UInt32, 
+        /**
+         * Step number (1-indexed)
+         */step: UInt32, 
+        /**
+         * Path to the image
+         */imagePath: String) {
         self.section = section
         self.step = step
         self.imagePath = imagePath
     }
+
+    
+
+    
 }
 
-extension StepImageEntry: Equatable, Hashable {
-    public static func == (lhs: StepImageEntry, rhs: StepImageEntry) -> Bool {
-        if lhs.section != rhs.section {
-            return false
-        }
-        if lhs.step != rhs.step {
-            return false
-        }
-        if lhs.imagePath != rhs.imagePath {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(section)
-        hasher.combine(step)
-        hasher.combine(imagePath)
-    }
-}
+#if compiler(>=6)
+extension StepImageEntry: Sendable {}
+#endif
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeStepImageEntry: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> StepImageEntry {
         return
             try StepImageEntry(
-                section: FfiConverterUInt32.read(from: &buf),
-                step: FfiConverterUInt32.read(from: &buf),
+                section: FfiConverterUInt32.read(from: &buf), 
+                step: FfiConverterUInt32.read(from: &buf), 
                 imagePath: FfiConverterString.read(from: &buf)
-            )
+        )
     }
 
     public static func write(_ value: StepImageEntry, into buf: inout [UInt8]) {
@@ -1437,56 +1877,83 @@ public struct FfiConverterTypeStepImageEntry: FfiConverterRustBuffer {
     }
 }
 
+
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public func FfiConverterTypeStepImageEntry_lift(_ buf: RustBuffer) throws -> StepImageEntry {
     return try FfiConverterTypeStepImageEntry.lift(buf)
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public func FfiConverterTypeStepImageEntry_lower(_ value: StepImageEntry) -> RustBuffer {
     return FfiConverterTypeStepImageEntry.lower(value)
 }
 
+
 /**
  * FFI-safe error type that wraps all possible errors.
  */
-public enum CooklangError {
+public 
+enum CooklangError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+    
+    
     /**
      * Recipe not found
      */
-    case NotFound(reason: String)
+    case NotFound(reason: String
+    )
     /**
      * IO error (file not found, permission denied, etc.)
      */
-    case IoError(reason: String)
+    case IoError(reason: String
+    )
     /**
      * Failed to parse recipe or metadata
      */
-    case ParseError(reason: String)
+    case ParseError(reason: String
+    )
     /**
      * Invalid path provided
      */
-    case InvalidPath(reason: String)
+    case InvalidPath(reason: String
+    )
     /**
      * Search operation failed
      */
-    case SearchError(reason: String)
+    case SearchError(reason: String
+    )
     /**
      * Tree operation failed
      */
-    case TreeError(reason: String)
+    case TreeError(reason: String
+    )
     /**
      * Menu listing operation failed
      */
-    case MenuError(reason: String)
+    case MenuError(reason: String
+    )
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension CooklangError: Sendable {}
+#endif
+
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeCooklangError: FfiConverterRustBuffer {
     typealias SwiftType = CooklangError
@@ -1494,79 +1961,310 @@ public struct FfiConverterTypeCooklangError: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CooklangError {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        case 1: return try .NotFound(
-                reason: FfiConverterString.read(from: &buf)
+
+        
+
+        
+        case 1: return .NotFound(
+            reason: try FfiConverterString.read(from: &buf)
             )
-        case 2: return try .IoError(
-                reason: FfiConverterString.read(from: &buf)
+        case 2: return .IoError(
+            reason: try FfiConverterString.read(from: &buf)
             )
-        case 3: return try .ParseError(
-                reason: FfiConverterString.read(from: &buf)
+        case 3: return .ParseError(
+            reason: try FfiConverterString.read(from: &buf)
             )
-        case 4: return try .InvalidPath(
-                reason: FfiConverterString.read(from: &buf)
+        case 4: return .InvalidPath(
+            reason: try FfiConverterString.read(from: &buf)
             )
-        case 5: return try .SearchError(
-                reason: FfiConverterString.read(from: &buf)
+        case 5: return .SearchError(
+            reason: try FfiConverterString.read(from: &buf)
             )
-        case 6: return try .TreeError(
-                reason: FfiConverterString.read(from: &buf)
+        case 6: return .TreeError(
+            reason: try FfiConverterString.read(from: &buf)
             )
-        case 7: return try .MenuError(
-                reason: FfiConverterString.read(from: &buf)
+        case 7: return .MenuError(
+            reason: try FfiConverterString.read(from: &buf)
             )
-        default: throw UniffiInternalError.unexpectedEnumCase
+
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: CooklangError, into buf: inout [UInt8]) {
         switch value {
+
+        
+
+        
+        
         case let .NotFound(reason):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(reason, into: &buf)
-
+            
+        
         case let .IoError(reason):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(reason, into: &buf)
-
+            
+        
         case let .ParseError(reason):
             writeInt(&buf, Int32(3))
             FfiConverterString.write(reason, into: &buf)
-
+            
+        
         case let .InvalidPath(reason):
             writeInt(&buf, Int32(4))
             FfiConverterString.write(reason, into: &buf)
-
+            
+        
         case let .SearchError(reason):
             writeInt(&buf, Int32(5))
             FfiConverterString.write(reason, into: &buf)
-
+            
+        
         case let .TreeError(reason):
             writeInt(&buf, Int32(6))
             FfiConverterString.write(reason, into: &buf)
-
+            
+        
         case let .MenuError(reason):
             writeInt(&buf, Int32(7))
             FfiConverterString.write(reason, into: &buf)
+            
         }
     }
 }
 
-extension CooklangError: Equatable, Hashable {}
 
-extension CooklangError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCooklangError_lift(_ buf: RustBuffer) throws -> CooklangError {
+    return try FfiConverterTypeCooklangError.lift(buf)
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-private struct FfiConverterOptionInt64: FfiConverterRustBuffer {
+public func FfiConverterTypeCooklangError_lower(_ value: CooklangError) -> RustBuffer {
+    return FfiConverterTypeCooklangError.lower(value)
+}
+
+
+/**
+ * FFI-safe representation of one child of a listed directory.
+ */
+
+public enum FfiDirEntry {
+    
+    /**
+     * A .cook/.menu file directly in the listed directory.
+     */
+    case recipe(recipe: FfiRecipeEntry
+    )
+    /**
+     * A subdirectory, with the number of recipes it holds however deeply
+     * nested.
+     */
+    case folder(name: String, path: String, recipeCount: UInt32
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiDirEntry: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDirEntry: FfiConverterRustBuffer {
+    typealias SwiftType = FfiDirEntry
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDirEntry {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .recipe(recipe: try FfiConverterTypeFfiRecipeEntry.read(from: &buf)
+        )
+        
+        case 2: return .folder(name: try FfiConverterString.read(from: &buf), path: try FfiConverterString.read(from: &buf), recipeCount: try FfiConverterUInt32.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiDirEntry, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .recipe(recipe):
+            writeInt(&buf, Int32(1))
+            FfiConverterTypeFfiRecipeEntry.write(recipe, into: &buf)
+            
+        
+        case let .folder(name,path,recipeCount):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(name, into: &buf)
+            FfiConverterString.write(path, into: &buf)
+            FfiConverterUInt32.write(recipeCount, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDirEntry_lift(_ buf: RustBuffer) throws -> FfiDirEntry {
+    return try FfiConverterTypeFfiDirEntry.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDirEntry_lower(_ value: FfiDirEntry) -> RustBuffer {
+    return FfiConverterTypeFfiDirEntry.lower(value)
+}
+
+
+
+/**
+ * One entry of a menu meal.
+ */
+
+public enum FfiMenuItem: Equatable, Hashable {
+    
+    /**
+     * A reference to another recipe
+     */
+    case recipeReference(name: String, path: String, quantity: String?, unit: String?, scale: Double?
+    )
+    /**
+     * A loose ingredient
+     */
+    case ingredient(name: String, quantity: String?, unit: String?
+    )
+    /**
+     * Connecting text
+     */
+    case text(text: String
+    )
+    /**
+     * A `-- comment`
+     */
+    case note(text: String
+    )
+    /**
+     * Separates items written on different lines of the same meal
+     */
+    case lineBreak
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiMenuItem: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiMenuItem: FfiConverterRustBuffer {
+    typealias SwiftType = FfiMenuItem
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMenuItem {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .recipeReference(name: try FfiConverterString.read(from: &buf), path: try FfiConverterString.read(from: &buf), quantity: try FfiConverterOptionString.read(from: &buf), unit: try FfiConverterOptionString.read(from: &buf), scale: try FfiConverterOptionDouble.read(from: &buf)
+        )
+        
+        case 2: return .ingredient(name: try FfiConverterString.read(from: &buf), quantity: try FfiConverterOptionString.read(from: &buf), unit: try FfiConverterOptionString.read(from: &buf)
+        )
+        
+        case 3: return .text(text: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 4: return .note(text: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 5: return .lineBreak
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiMenuItem, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .recipeReference(name,path,quantity,unit,scale):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(name, into: &buf)
+            FfiConverterString.write(path, into: &buf)
+            FfiConverterOptionString.write(quantity, into: &buf)
+            FfiConverterOptionString.write(unit, into: &buf)
+            FfiConverterOptionDouble.write(scale, into: &buf)
+            
+        
+        case let .ingredient(name,quantity,unit):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(name, into: &buf)
+            FfiConverterOptionString.write(quantity, into: &buf)
+            FfiConverterOptionString.write(unit, into: &buf)
+            
+        
+        case let .text(text):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(text, into: &buf)
+            
+        
+        case let .note(text):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(text, into: &buf)
+            
+        
+        case .lineBreak:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMenuItem_lift(_ buf: RustBuffer) throws -> FfiMenuItem {
+    return try FfiConverterTypeFfiMenuItem.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMenuItem_lower(_ value: FfiMenuItem) -> RustBuffer {
+    return FfiConverterTypeFfiMenuItem.lower(value)
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
     typealias SwiftType = Int64?
 
-    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         guard let value = value else {
             writeInt(&buf, Int8(0))
             return
@@ -1575,7 +2273,7 @@ private struct FfiConverterOptionInt64: FfiConverterRustBuffer {
         FfiConverterInt64.write(value, into: &buf)
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterInt64.read(from: &buf)
@@ -1585,12 +2283,36 @@ private struct FfiConverterOptionInt64: FfiConverterRustBuffer {
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-private struct FfiConverterOptionString: FfiConverterRustBuffer {
+fileprivate struct FfiConverterOptionDouble: FfiConverterRustBuffer {
+    typealias SwiftType = Double?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterDouble.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterDouble.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
-    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         guard let value = value else {
             writeInt(&buf, Int8(0))
             return
@@ -1599,7 +2321,7 @@ private struct FfiConverterOptionString: FfiConverterRustBuffer {
         FfiConverterString.write(value, into: &buf)
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterString.read(from: &buf)
@@ -1609,12 +2331,12 @@ private struct FfiConverterOptionString: FfiConverterRustBuffer {
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-private struct FfiConverterOptionTypeFfiRecipeEntry: FfiConverterRustBuffer {
+fileprivate struct FfiConverterOptionTypeFfiRecipeEntry: FfiConverterRustBuffer {
     typealias SwiftType = FfiRecipeEntry?
 
-    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         guard let value = value else {
             writeInt(&buf, Int8(0))
             return
@@ -1623,7 +2345,7 @@ private struct FfiConverterOptionTypeFfiRecipeEntry: FfiConverterRustBuffer {
         FfiConverterTypeFfiRecipeEntry.write(value, into: &buf)
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeFfiRecipeEntry.read(from: &buf)
@@ -1633,12 +2355,12 @@ private struct FfiConverterOptionTypeFfiRecipeEntry: FfiConverterRustBuffer {
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-private struct FfiConverterOptionTypeFfiTreeNode: FfiConverterRustBuffer {
+fileprivate struct FfiConverterOptionTypeFfiTreeNode: FfiConverterRustBuffer {
     typealias SwiftType = FfiTreeNode?
 
-    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         guard let value = value else {
             writeInt(&buf, Int8(0))
             return
@@ -1647,7 +2369,7 @@ private struct FfiConverterOptionTypeFfiTreeNode: FfiConverterRustBuffer {
         FfiConverterTypeFfiTreeNode.write(value, into: &buf)
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeFfiTreeNode.read(from: &buf)
@@ -1657,12 +2379,12 @@ private struct FfiConverterOptionTypeFfiTreeNode: FfiConverterRustBuffer {
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-private struct FfiConverterSequenceString: FfiConverterRustBuffer {
+fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
-    static func write(_ value: [String], into buf: inout [UInt8]) {
+    public static func write(_ value: [String], into buf: inout [UInt8]) {
         let len = Int32(value.count)
         writeInt(&buf, len)
         for item in value {
@@ -1670,24 +2392,24 @@ private struct FfiConverterSequenceString: FfiConverterRustBuffer {
         }
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
         let len: Int32 = try readInt(&buf)
         var seq = [String]()
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
-            try seq.append(FfiConverterString.read(from: &buf))
+            seq.append(try FfiConverterString.read(from: &buf))
         }
         return seq
     }
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-private struct FfiConverterSequenceTypeFfiRecipeEntry: FfiConverterRustBuffer {
+fileprivate struct FfiConverterSequenceTypeFfiRecipeEntry: FfiConverterRustBuffer {
     typealias SwiftType = [FfiRecipeEntry]
 
-    static func write(_ value: [FfiRecipeEntry], into buf: inout [UInt8]) {
+    public static func write(_ value: [FfiRecipeEntry], into buf: inout [UInt8]) {
         let len = Int32(value.count)
         writeInt(&buf, len)
         for item in value {
@@ -1695,24 +2417,74 @@ private struct FfiConverterSequenceTypeFfiRecipeEntry: FfiConverterRustBuffer {
         }
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiRecipeEntry] {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiRecipeEntry] {
         let len: Int32 = try readInt(&buf)
         var seq = [FfiRecipeEntry]()
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
-            try seq.append(FfiConverterTypeFfiRecipeEntry.read(from: &buf))
+            seq.append(try FfiConverterTypeFfiRecipeEntry.read(from: &buf))
         }
         return seq
     }
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-private struct FfiConverterSequenceTypeFfiTreeNode: FfiConverterRustBuffer {
+fileprivate struct FfiConverterSequenceTypeFfiMenuMeal: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiMenuMeal]
+
+    public static func write(_ value: [FfiMenuMeal], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiMenuMeal.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiMenuMeal] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiMenuMeal]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiMenuMeal.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiMenuSection: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiMenuSection]
+
+    public static func write(_ value: [FfiMenuSection], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiMenuSection.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiMenuSection] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiMenuSection]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiMenuSection.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiTreeNode: FfiConverterRustBuffer {
     typealias SwiftType = [FfiTreeNode]
 
-    static func write(_ value: [FfiTreeNode], into buf: inout [UInt8]) {
+    public static func write(_ value: [FfiTreeNode], into buf: inout [UInt8]) {
         let len = Int32(value.count)
         writeInt(&buf, len)
         for item in value {
@@ -1720,24 +2492,24 @@ private struct FfiConverterSequenceTypeFfiTreeNode: FfiConverterRustBuffer {
         }
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiTreeNode] {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiTreeNode] {
         let len: Int32 = try readInt(&buf)
         var seq = [FfiTreeNode]()
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
-            try seq.append(FfiConverterTypeFfiTreeNode.read(from: &buf))
+            seq.append(try FfiConverterTypeFfiTreeNode.read(from: &buf))
         }
         return seq
     }
 }
 
 #if swift(>=5.8)
-    @_documentation(visibility: private)
+@_documentation(visibility: private)
 #endif
-private struct FfiConverterSequenceTypeStepImageEntry: FfiConverterRustBuffer {
+fileprivate struct FfiConverterSequenceTypeStepImageEntry: FfiConverterRustBuffer {
     typealias SwiftType = [StepImageEntry]
 
-    static func write(_ value: [StepImageEntry], into buf: inout [UInt8]) {
+    public static func write(_ value: [StepImageEntry], into buf: inout [UInt8]) {
         let len = Int32(value.count)
         writeInt(&buf, len)
         for item in value {
@@ -1745,17 +2517,66 @@ private struct FfiConverterSequenceTypeStepImageEntry: FfiConverterRustBuffer {
         }
     }
 
-    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [StepImageEntry] {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [StepImageEntry] {
         let len: Int32 = try readInt(&buf)
         var seq = [StepImageEntry]()
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
-            try seq.append(FfiConverterTypeStepImageEntry.read(from: &buf))
+            seq.append(try FfiConverterTypeStepImageEntry.read(from: &buf))
         }
         return seq
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiDirEntry: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiDirEntry]
+
+    public static func write(_ value: [FfiDirEntry], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiDirEntry.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiDirEntry] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiDirEntry]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiDirEntry.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiMenuItem: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiMenuItem]
+
+    public static func write(_ value: [FfiMenuItem], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiMenuItem.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiMenuItem] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiMenuItem]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiMenuItem.read(from: &buf))
+        }
+        return seq
+    }
+}
 /**
  * Builds a hierarchical tree of all recipes in a directory.
  *
@@ -1768,14 +2589,32 @@ private struct FfiConverterSequenceTypeStepImageEntry: FfiConverterRustBuffer {
  * # Returns
  * The recipe tree, or an error.
  */
-public func buildTree(baseDir: String) throws -> FfiRecipeTree {
-    return try FfiConverterTypeFfiRecipeTree.lift(rustCallWithError(FfiConverterTypeCooklangError.lift) {
-        uniffi_cooklang_find_fn_func_build_tree(
-            FfiConverterString.lower(baseDir), $0
-        )
-    })
+public func buildTree(baseDir: String)throws  -> FfiRecipeTree  {
+    return try  FfiConverterTypeFfiRecipeTree_lift(try rustCallWithError(FfiConverterTypeCooklangError_lift) {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_build_tree(
+        FfiConverterString.lower(baseDir),uniffiCallStatus
+    )
+})
 }
-
+/**
+ * Counts the recipes under a directory, however deeply nested, without
+ * opening any of them.
+ *
+ * # Arguments
+ * * `dir` - Directory to count recipes in
+ *
+ * # Returns
+ * The number of .cook/.menu files, or an error.
+ */
+public func countRecipes(dir: String)throws  -> UInt32  {
+    return try  FfiConverterUInt32.lift(try rustCallWithError(FfiConverterTypeCooklangError_lift) {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_count_recipes(
+        FfiConverterString.lower(dir),uniffiCallStatus
+    )
+})
+}
 /**
  * Loads a recipe by name from the specified directories.
  *
@@ -1789,24 +2628,45 @@ public func buildTree(baseDir: String) throws -> FfiRecipeTree {
  * # Returns
  * The recipe if found, or an error.
  */
-public func getRecipe(baseDirs: [String], name: String) throws -> FfiRecipeEntry {
-    return try FfiConverterTypeFfiRecipeEntry.lift(rustCallWithError(FfiConverterTypeCooklangError.lift) {
-        uniffi_cooklang_find_fn_func_get_recipe(
-            FfiConverterSequenceString.lower(baseDirs),
-            FfiConverterString.lower(name), $0
-        )
-    })
+public func getRecipe(baseDirs: [String], name: String)throws  -> FfiRecipeEntry  {
+    return try  FfiConverterTypeFfiRecipeEntry_lift(try rustCallWithError(FfiConverterTypeCooklangError_lift) {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_get_recipe(
+        FfiConverterSequenceString.lower(baseDirs),
+        FfiConverterString.lower(name),uniffiCallStatus
+    )
+})
 }
-
 /**
  * Returns the library version.
  */
-public func libraryVersion() -> String {
-    return try! FfiConverterString.lift(try! rustCall {
-        uniffi_cooklang_find_fn_func_library_version($0)
-    })
+public func libraryVersion() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_library_version(uniffiCallStatus
+    )
+})
 }
-
+/**
+ * Lists the recipes and subfolders directly inside a directory.
+ *
+ * Only recipes at this level are opened; subfolders are counted by file
+ * name, never read. Use this instead of `build_tree` to show one folder.
+ *
+ * # Arguments
+ * * `dir` - Directory to list
+ *
+ * # Returns
+ * The listing, or an error.
+ */
+public func listDir(dir: String)throws  -> FfiDirListing  {
+    return try  FfiConverterTypeFfiDirListing_lift(try rustCallWithError(FfiConverterTypeCooklangError_lift) {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_list_dir(
+        FfiConverterString.lower(dir),uniffiCallStatus
+    )
+})
+}
 /**
  * Lists menu files that have a section header containing the given date.
  *
@@ -1821,15 +2681,60 @@ public func libraryVersion() -> String {
  * # Returns
  * List of matching menu recipes.
  */
-public func listMenusForDate(baseDirs: [String], date: String) throws -> [FfiRecipeEntry] {
-    return try FfiConverterSequenceTypeFfiRecipeEntry.lift(rustCallWithError(FfiConverterTypeCooklangError.lift) {
-        uniffi_cooklang_find_fn_func_list_menus_for_date(
-            FfiConverterSequenceString.lower(baseDirs),
-            FfiConverterString.lower(date), $0
-        )
-    })
+public func listMenusForDate(baseDirs: [String], date: String)throws  -> [FfiRecipeEntry]  {
+    return try  FfiConverterSequenceTypeFfiRecipeEntry.lift(try rustCallWithError(FfiConverterTypeCooklangError_lift) {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_list_menus_for_date(
+        FfiConverterSequenceString.lower(baseDirs),
+        FfiConverterString.lower(date),uniffiCallStatus
+    )
+})
 }
-
+/**
+ * Parses a `.menu` file and resolves its recipe reference scales.
+ *
+ * Reference paths resolve against `base_dirs` (the library root), not the
+ * menu's own folder; each is looked up as `<path>.cook`, then
+ * `<path>.menu` (or as-is when the path already ends in `.menu`). A fixed quantity (`{=2}`) is still multiplied by `scale`,
+ * matching CookCLI. Missing recipes or metadata fall back silently to the
+ * raw quantity.
+ *
+ * # Arguments
+ * * `path` - Path to the `.menu` file
+ * * `base_dirs` - Directories to look up referenced recipes in
+ * * `scale` - Multiplier applied to the whole menu (1.0 for as written);
+ * must be finite and greater than 0
+ *
+ * # Returns
+ * The parsed menu, or `CooklangError::MenuError` if `scale` is invalid or
+ * the file isn't a menu, or an error if the file cannot be read.
+ */
+public func parseMenu(path: String, baseDirs: [String], scale: Double)throws  -> FfiMenu  {
+    return try  FfiConverterTypeFfiMenu_lift(try rustCallWithError(FfiConverterTypeCooklangError_lift) {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_parse_menu(
+        FfiConverterString.lower(path),
+        FfiConverterSequenceString.lower(baseDirs),
+        FfiConverterDouble.lower(scale),uniffiCallStatus
+    )
+})
+}
+/**
+ * Parses menu content without resolving recipe reference scales.
+ *
+ * # Arguments
+ * * `content` - The menu text, including any YAML frontmatter
+ * * `name` - Name to use when the frontmatter has no title
+ */
+public func parseMenuContent(content: String, name: String) -> FfiMenu  {
+    return try!  FfiConverterTypeFfiMenu_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_parse_menu_content(
+        FfiConverterString.lower(content),
+        FfiConverterString.lower(name),uniffiCallStatus
+    )
+})
+}
 /**
  * Creates a recipe from file content.
  *
@@ -1843,15 +2748,15 @@ public func listMenusForDate(baseDirs: [String], date: String) throws -> [FfiRec
  * # Returns
  * The recipe entry, or an error if parsing fails.
  */
-public func recipeFromContent(content: String, name: String?) throws -> FfiRecipeEntry {
-    return try FfiConverterTypeFfiRecipeEntry.lift(rustCallWithError(FfiConverterTypeCooklangError.lift) {
-        uniffi_cooklang_find_fn_func_recipe_from_content(
-            FfiConverterString.lower(content),
-            FfiConverterOptionString.lower(name), $0
-        )
-    })
+public func recipeFromContent(content: String, name: String?)throws  -> FfiRecipeEntry  {
+    return try  FfiConverterTypeFfiRecipeEntry_lift(try rustCallWithError(FfiConverterTypeCooklangError_lift) {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_recipe_from_content(
+        FfiConverterString.lower(content),
+        FfiConverterOptionString.lower(name),uniffiCallStatus
+    )
+})
 }
-
 /**
  * Creates a recipe from a file path.
  *
@@ -1861,14 +2766,14 @@ public func recipeFromContent(content: String, name: String?) throws -> FfiRecip
  * # Returns
  * The recipe entry, or an error if loading fails.
  */
-public func recipeFromPath(path: String) throws -> FfiRecipeEntry {
-    return try FfiConverterTypeFfiRecipeEntry.lift(rustCallWithError(FfiConverterTypeCooklangError.lift) {
-        uniffi_cooklang_find_fn_func_recipe_from_path(
-            FfiConverterString.lower(path), $0
-        )
-    })
+public func recipeFromPath(path: String)throws  -> FfiRecipeEntry  {
+    return try  FfiConverterTypeFfiRecipeEntry_lift(try rustCallWithError(FfiConverterTypeCooklangError_lift) {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_recipe_from_path(
+        FfiConverterString.lower(path),uniffiCallStatus
+    )
+})
 }
-
 /**
  * Searches for recipes matching a query string.
  *
@@ -1882,15 +2787,15 @@ public func recipeFromPath(path: String) throws -> FfiRecipeEntry {
  * # Returns
  * List of matching recipes sorted by relevance.
  */
-public func search(baseDir: String, query: String) throws -> [FfiRecipeEntry] {
-    return try FfiConverterSequenceTypeFfiRecipeEntry.lift(rustCallWithError(FfiConverterTypeCooklangError.lift) {
-        uniffi_cooklang_find_fn_func_search(
-            FfiConverterString.lower(baseDir),
-            FfiConverterString.lower(query), $0
-        )
-    })
+public func search(baseDir: String, query: String)throws  -> [FfiRecipeEntry]  {
+    return try  FfiConverterSequenceTypeFfiRecipeEntry.lift(try rustCallWithError(FfiConverterTypeCooklangError_lift) {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_search(
+        FfiConverterString.lower(baseDir),
+        FfiConverterString.lower(query),uniffiCallStatus
+    )
+})
 }
-
 /**
  * Searches for recipes matching a query string, keeping only those whose
  * frontmatter also satisfies a metadata filter.
@@ -1914,14 +2819,15 @@ public func search(baseDir: String, query: String) throws -> [FfiRecipeEntry] {
  * non-empty, or sorted by path otherwise. An invalid `filter_json` is
  * reported as `CooklangError::ParseError`.
  */
-public func searchWithMetadataFilter(baseDir: String, query: String, filterJson: String) throws -> [FfiRecipeEntry] {
-    return try FfiConverterSequenceTypeFfiRecipeEntry.lift(rustCallWithError(FfiConverterTypeCooklangError.lift) {
-        uniffi_cooklang_find_fn_func_search_with_metadata_filter(
-            FfiConverterString.lower(baseDir),
-            FfiConverterString.lower(query),
-            FfiConverterString.lower(filterJson), $0
-        )
-    })
+public func searchWithMetadataFilter(baseDir: String, query: String, filterJson: String)throws  -> [FfiRecipeEntry]  {
+    return try  FfiConverterSequenceTypeFfiRecipeEntry.lift(try rustCallWithError(FfiConverterTypeCooklangError_lift) {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_search_with_metadata_filter(
+        FfiConverterString.lower(baseDir),
+        FfiConverterString.lower(query),
+        FfiConverterString.lower(filterJson),uniffiCallStatus
+    )
+})
 }
 
 private enum InitializationResult {
@@ -1929,100 +2835,113 @@ private enum InitializationResult {
     case contractVersionMismatch
     case apiChecksumMismatch
 }
-
-/// Use a global variable to perform the versioning checks. Swift ensures that
-/// the code inside is only computed once.
-private var initializationResult: InitializationResult = {
+// Use a global variable to perform the versioning checks. Swift ensures that
+// the code inside is only computed once.
+private let initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
-    let bindings_contract_version = 26
+    let bindings_contract_version = 30
     // Get the scaffolding contract version by calling the into the dylib
     let scaffolding_contract_version = ffi_cooklang_find_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if uniffi_cooklang_find_checksum_func_build_tree() != 33096 {
+    if (uniffi_cooklang_find_checksum_func_build_tree() != 33412) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_func_get_recipe() != 1817 {
+    if (uniffi_cooklang_find_checksum_func_count_recipes() != 13747) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_func_library_version() != 55411 {
+    if (uniffi_cooklang_find_checksum_func_get_recipe() != 6416) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_func_list_menus_for_date() != 43406 {
+    if (uniffi_cooklang_find_checksum_func_library_version() != 3771) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_func_recipe_from_content() != 23295 {
+    if (uniffi_cooklang_find_checksum_func_list_dir() != 4850) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_func_recipe_from_path() != 40862 {
+    if (uniffi_cooklang_find_checksum_func_list_menus_for_date() != 56278) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_func_search() != 59640 {
+    if (uniffi_cooklang_find_checksum_func_parse_menu() != 38383) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_func_search_with_metadata_filter() != 36687 {
+    if (uniffi_cooklang_find_checksum_func_parse_menu_content() != 51927) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipeentry_content() != 46621 {
+    if (uniffi_cooklang_find_checksum_func_recipe_from_content() != 10729) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipeentry_file_name() != 167 {
+    if (uniffi_cooklang_find_checksum_func_recipe_from_path() != 52544) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipeentry_get_metadata_value() != 31132 {
+    if (uniffi_cooklang_find_checksum_func_search() != 48252) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipeentry_get_step_image() != 39989 {
+    if (uniffi_cooklang_find_checksum_func_search_with_metadata_filter() != 61491) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipeentry_is_menu() != 26536 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_content() != 9216) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipeentry_metadata() != 18424 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_file_name() != 191) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipeentry_name() != 12431 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_get_metadata_value() != 61982) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipeentry_path() != 52704 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_get_step_image() != 32367) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipeentry_related_files() != 39009 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_is_menu() != 46635) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipeentry_step_images() != 59649 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_metadata() != 42296) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipeentry_tags() != 60238 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_name() != 36828) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipeentry_title_image() != 17074 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_path() != 23295) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipetree_all_nodes() != 53124 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_related_files() != 10559) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipetree_all_recipes() != 27491 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_step_images() != 49242) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipetree_get_child() != 20134 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_tags() != 6465) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipetree_get_recipe_at_path() != 8996 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_title_image() != 47540) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipetree_recipe() != 1902 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipetree_all_nodes() != 8106) {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_cooklang_find_checksum_method_ffirecipetree_root() != 14587 {
+    if (uniffi_cooklang_find_checksum_method_ffirecipetree_all_recipes() != 46957) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_cooklang_find_checksum_method_ffirecipetree_get_child() != 5023) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_cooklang_find_checksum_method_ffirecipetree_get_recipe_at_path() != 46588) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_cooklang_find_checksum_method_ffirecipetree_recipe() != 40795) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_cooklang_find_checksum_method_ffirecipetree_root() != 15773) {
         return InitializationResult.apiChecksumMismatch
     }
 
     return InitializationResult.ok
 }()
 
-private func uniffiEnsureInitialized() {
+// Make the ensure init function public so that other modules which have external type references to
+// our types can call it.
+public func uniffiEnsureCooklangFindInitialized() {
     switch initializationResult {
     case .ok:
         break

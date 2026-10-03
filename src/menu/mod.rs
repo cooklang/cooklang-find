@@ -11,6 +11,7 @@
 //! supplies the date as an opaque string that is matched literally.
 
 mod model;
+mod parse;
 
 pub use model::{Menu, MenuItem, MenuMeal, MenuSection};
 

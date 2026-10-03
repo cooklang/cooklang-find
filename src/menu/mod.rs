@@ -12,6 +12,7 @@
 
 mod model;
 mod parse;
+mod scale;
 
 pub use model::{Menu, MenuItem, MenuMeal, MenuSection};
 

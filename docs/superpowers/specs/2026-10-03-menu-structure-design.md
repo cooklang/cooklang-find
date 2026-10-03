@@ -129,6 +129,8 @@ extraction. Parsing never fails; unrecognised content becomes `Text`.
      menu). Otherwise → `Ingredient`. One leading modifier
      (`?`, `+`, `-`, `&`) is ignored.
    - `--` outside a component starts a `Note` for the rest of the line.
+     `@` immediately followed by `--` is not a component (not an `@-`
+     modifier), so `@-- note` is `Text("@")` then `Note("note")`.
    - Remaining text between items → `Text` (skipped when blank).
 6. Meals with no items are dropped; sections are kept even if empty so day
    lists stay complete.

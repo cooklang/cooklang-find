@@ -259,6 +259,10 @@ fn push_text(text: &str, items: &mut Vec<MenuItem>) {
 
 /// Parses the component after an `@`, returning it and the bytes consumed.
 fn parse_component(s: &str) -> Option<(MenuItem, usize)> {
+    // `@-- note` is a stray `@` before a comment, not an `@-` modifier.
+    if s.starts_with("--") {
+        return None;
+    }
     // Modifiers (`@?`, `@+`, `@-`, `@&`) don't change what is listed.
     let body = s.strip_prefix(['?', '+', '-', '&']).unwrap_or(s);
     let modifiers = s.len() - body.len();
@@ -1039,6 +1043,15 @@ mod tests {
                     ]
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn at_followed_by_comment_is_not_an_ingredient() {
+        assert_eq!(scan("@-- note"), vec![text("@"), note("note")]);
+        assert_eq!(
+            scan("@eggs{} @-- later"),
+            vec![ingredient("eggs", None, None), text(" @"), note("later")]
         );
     }
 

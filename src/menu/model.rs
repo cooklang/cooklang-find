@@ -44,8 +44,12 @@ pub struct MenuMeal {
 }
 
 /// One entry of a meal.
+///
+/// New item kinds (e.g. cookware or timers) may be added in future
+/// releases, so matches outside this crate need a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum MenuItem {
     /// A reference to another recipe, e.g. `@./Breakfast/Pancakes{2}`.
     RecipeReference {

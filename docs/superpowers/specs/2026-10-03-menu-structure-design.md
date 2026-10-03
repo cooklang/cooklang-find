@@ -51,6 +51,7 @@ pub struct MenuMeal {
 }
 
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum MenuItem {
     RecipeReference {
         /// Last path component, e.g. "Easy Pancakes".
@@ -85,6 +86,11 @@ pub enum MenuItem {
     LineBreak,
 }
 ```
+
+`MenuItem` is `#[non_exhaustive]`: new item kinds (e.g. cookware, timers)
+may be added, so external matches need a wildcard arm. The in-crate
+conversion to `FfiMenuItem` stays exhaustive (no wildcard) so a new kind
+must be mapped explicitly; `FfiMenuItem` itself is not `non_exhaustive`.
 
 Differences from CookCLI's API shape, intentional:
 

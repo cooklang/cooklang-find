@@ -10,7 +10,10 @@ use crate::search::{
     search as search_internal, search_with_filter as search_with_filter_internal, MetadataFilter,
     SearchError,
 };
-use crate::tree::{build_tree as build_tree_internal, RecipeTree, TreeError};
+use crate::tree::{
+    build_tree as build_tree_internal, count_recipes as count_recipes_internal,
+    list_dir as list_dir_internal, DirEntry, RecipeTree, TreeError,
+};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::sync::Arc;
 
@@ -388,6 +391,29 @@ fn collect_recipes(tree: &RecipeTree, recipes: &mut Vec<Arc<FfiRecipeEntry>>) {
     }
 }
 
+/// FFI-safe representation of one child of a listed directory.
+#[derive(uniffi::Enum)]
+pub enum FfiDirEntry {
+    /// A .cook/.menu file directly in the listed directory.
+    Recipe { recipe: Arc<FfiRecipeEntry> },
+    /// A subdirectory, with the number of recipes it holds however deeply
+    /// nested.
+    Folder {
+        name: String,
+        path: String,
+        recipe_count: u32,
+    },
+}
+
+/// FFI-safe representation of a one-level directory listing.
+#[derive(uniffi::Record)]
+pub struct FfiDirListing {
+    /// The directory that was listed
+    pub path: String,
+    /// Its recipes and subfolders, sorted by file name
+    pub entries: Vec<FfiDirEntry>,
+}
+
 // ============================================================================
 // Exported FFI Functions
 // ============================================================================
@@ -542,6 +568,55 @@ pub fn list_menus_for_date(
 pub fn build_tree(base_dir: String) -> Result<Arc<FfiRecipeTree>, CooklangError> {
     let tree = build_tree_internal(&base_dir)?;
     Ok(Arc::new(FfiRecipeTree { inner: tree }))
+}
+
+/// Lists the recipes and subfolders directly inside a directory.
+///
+/// Only recipes at this level are opened; subfolders are counted by file
+/// name, never read. Use this instead of `build_tree` to show one folder.
+///
+/// # Arguments
+/// * `dir` - Directory to list
+///
+/// # Returns
+/// The listing, or an error.
+#[uniffi::export]
+pub fn list_dir(dir: String) -> Result<FfiDirListing, CooklangError> {
+    let listing = list_dir_internal(&dir)?;
+    Ok(FfiDirListing {
+        path: listing.path.to_string(),
+        entries: listing
+            .entries
+            .into_iter()
+            .map(|entry| match entry {
+                DirEntry::Recipe(recipe) => FfiDirEntry::Recipe {
+                    recipe: Arc::new(FfiRecipeEntry::new(recipe)),
+                },
+                DirEntry::Folder {
+                    name,
+                    path,
+                    recipe_count,
+                } => FfiDirEntry::Folder {
+                    name,
+                    path: path.to_string(),
+                    recipe_count: recipe_count as u32,
+                },
+            })
+            .collect(),
+    })
+}
+
+/// Counts the recipes under a directory, however deeply nested, without
+/// opening any of them.
+///
+/// # Arguments
+/// * `dir` - Directory to count recipes in
+///
+/// # Returns
+/// The number of .cook/.menu files, or an error.
+#[uniffi::export]
+pub fn count_recipes(dir: String) -> Result<u32, CooklangError> {
+    Ok(count_recipes_internal(&dir)? as u32)
 }
 
 /// Returns the library version.
@@ -722,6 +797,48 @@ mod tests {
         assert!(!household.has_recipe);
         assert_eq!(household.recipe_count, 2);
         assert_eq!(tree.root().recipe_count, 2);
+    }
+
+    #[test]
+    fn test_list_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+
+        create_test_recipe(
+            temp_path,
+            "pancakes",
+            indoc! {r#"
+            ---
+            title: Pancakes
+            ---
+
+            Make pancakes"#},
+        );
+        let laundry_dir = format!("{}/household/laundry", temp_path);
+        fs::create_dir_all(&laundry_dir).unwrap();
+        create_test_recipe(&laundry_dir, "detergent", "Mix detergent");
+        create_test_recipe(&laundry_dir, "softener", "Mix softener");
+
+        let listing = list_dir(temp_path.to_string()).unwrap();
+
+        assert_eq!(listing.path, temp_path);
+        assert_eq!(listing.entries.len(), 2);
+        match &listing.entries[0] {
+            FfiDirEntry::Folder {
+                name, recipe_count, ..
+            } => {
+                assert_eq!(name, "household");
+                assert_eq!(*recipe_count, 2);
+            }
+            FfiDirEntry::Recipe { .. } => panic!("expected the household folder"),
+        }
+        match &listing.entries[1] {
+            FfiDirEntry::Recipe { recipe } => {
+                assert_eq!(recipe.name(), Some("Pancakes".to_string()))
+            }
+            FfiDirEntry::Folder { .. } => panic!("expected the pancakes recipe"),
+        }
+        assert_eq!(count_recipes(temp_path.to_string()).unwrap(), 3);
     }
 
     #[test]

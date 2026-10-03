@@ -66,4 +66,4 @@ pub use model::*;
 pub use search::{
     filter_by_metadata, search, search_with_filter, Condition, MetadataFilter, OneOrMany,
 };
-pub use tree::{build_tree, RecipeTree};
+pub use tree::{build_tree, count_recipes, list_dir, DirEntry, DirListing, RecipeTree};

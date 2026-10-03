@@ -51,7 +51,12 @@ pub enum MenuItem {
     RecipeReference {
         /// Last path component, e.g. "Pancakes".
         name: String,
-        /// Path without `./` and `.cook`, e.g. "Breakfast/Pancakes".
+        /// Path relative to the library root, with `./` and `.cook`
+        /// stripped (a `.menu` suffix is kept), e.g. "Breakfast/Pancakes"
+        /// or "Weekly.menu". To load it, look up `<path>.cook` (or `<path>`
+        /// if it ends in `.menu`) under the base dir. Don't pass it to
+        /// `get_recipe` directly: a dotted name like "Mr. Smith's Stew"
+        /// would be mistaken for one with an extension.
         path: String,
         /// Target quantity as authored, e.g. "2" or "1/2".
         quantity: Option<String>,

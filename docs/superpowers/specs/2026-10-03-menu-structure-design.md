@@ -55,8 +55,12 @@ pub enum MenuItem {
     RecipeReference {
         /// Last path component, e.g. "Easy Pancakes".
         name: String,
-        /// Path relative to the library root, without `./` and `.cook`,
-        /// e.g. "Breakfast/Easy Pancakes". Suitable for `get_recipe`.
+        /// Path relative to the library root, with `./` and `.cook`
+        /// stripped (a `.menu` suffix is kept), e.g. "Breakfast/Easy
+        /// Pancakes" or "Weekly.menu". To load it, look up `<path>.cook`
+        /// (or `<path>` if it ends in `.menu`) under the base dir; not
+        /// directly suitable for `get_recipe`, whose extension detection
+        /// breaks on dotted names like "Mr. Smith's Stew".
         path: String,
         /// Target quantity as authored inside `{}` (e.g. "2", "1/2").
         quantity: Option<String>,
@@ -121,7 +125,8 @@ extraction. Parsing never fails; unrecognised content becomes `Text`.
      punctuation, or `@`. An empty name (`@./.cook{}`) leaves the text as
      `Text`. Trailing `(note)` after an ingredient is ignored.
    - Name starting with `./` or `../` → `RecipeReference` (strip `./`,
-     strip `.cook`). Otherwise → `Ingredient`. One leading modifier
+     strip `.cook`; a `.menu` suffix is kept so consumers can tell it's a
+     menu). Otherwise → `Ingredient`. One leading modifier
      (`?`, `+`, `-`, `&`) is ignored.
    - `--` outside a component starts a `Note` for the rest of the line.
    - Remaining text between items → `Text` (skipped when blank).
@@ -162,7 +167,8 @@ A referenced recipe is loaded only when the result depends on it (numeric
 target with a unit), memoised per call. Paths resolve against `base_dirs`
 (the library root), not the menu's folder: for each base dir in turn,
 `<path>.cook` then `<path>.menu` (appended explicitly so dotted names aren't
-mistaken for extensions). Missing recipes fall back silently to raw.
+mistaken for extensions); a path already ending in `.menu`
+(`@./Weekly.menu{}`) is looked up as-is. Missing recipes fall back silently to raw.
 
 The caller must pass a finite `menu_scale > 0`; `ffi::parse_menu` returns
 `CooklangError::MenuError` otherwise.

@@ -701,7 +701,7 @@ pub fn list_menus_for_date(
 ///
 /// Reference paths resolve against `base_dirs` (the library root), not the
 /// menu's own folder; each is looked up as `<path>.cook`, then
-/// `<path>.menu`. A fixed quantity (`{=2}`) is still multiplied by `scale`,
+/// `<path>.menu` (or as-is when the path already ends in `.menu`). A fixed quantity (`{=2}`) is still multiplied by `scale`,
 /// matching CookCLI. Missing recipes or metadata fall back silently to the
 /// raw quantity.
 ///

@@ -31,7 +31,8 @@ impl Menu {
     /// Reference paths are resolved against `base_dirs` (the library root),
     /// not the menu's own folder: `@./Mains/Stew` is looked up as
     /// `<base_dir>/Mains/Stew.cook`, then `<base_dir>/Mains/Stew.menu`, in
-    /// each base dir in turn. A recipe is only loaded when the result depends
+    /// each base dir in turn; `@./Weekly.menu` is looked up as
+    /// `<base_dir>/Weekly.menu`. A recipe is only loaded when the result depends
     /// on it (a numeric target with a unit), at most once per call.
     pub fn resolve_scales<P: AsRef<Utf8Path>>(&mut self, base_dirs: &[P], menu_scale: f64) {
         let mut sizes: HashMap<String, RecipeSize> = HashMap::new();
@@ -70,13 +71,18 @@ struct RecipeSize {
 }
 
 impl RecipeSize {
-    /// Loads `<path>.cook`, then `<path>.menu`, from each base dir in turn.
+    /// Loads `<path>.cook`, then `<path>.menu`, from each base dir in turn;
+    /// a path already ending in `.menu` (`@./Weekly.menu{}`) is loaded as-is.
     ///
     /// The extension is appended explicitly (rather than letting
     /// `get_recipe` guess) so a dotted name like `Mr. Smith's Stew` is not
     /// mistaken for one with an extension.
     fn load<P: AsRef<Utf8Path>>(base_dirs: &[P], path: &str) -> Self {
-        let candidates = [format!("{path}.cook"), format!("{path}.menu")];
+        let candidates = if path.ends_with(".menu") {
+            vec![path.to_string()]
+        } else {
+            vec![format!("{path}.cook"), format!("{path}.menu")]
+        };
         base_dirs
             .iter()
             .flat_map(|dir| {
@@ -281,6 +287,16 @@ mod tests {
         let (_t, dir) = recipes_dir();
         fs::write(dir.join("Sub.menu"), "---\nservings: 2\n---\n= Day\n").unwrap();
         assert_eq!(resolve("@./Sub{4%servings}", &dir, 1.0), vec![Some(2.0)]);
+    }
+
+    #[test]
+    fn explicit_menu_reference_is_looked_up_as_is() {
+        let (_t, dir) = recipes_dir();
+        fs::write(dir.join("Weekly.menu"), "---\nservings: 2\n---\n= Day\n").unwrap();
+        assert_eq!(
+            resolve("@./Weekly.menu{4%servings}", &dir, 1.0),
+            vec![Some(2.0)]
+        );
     }
 
     #[test]

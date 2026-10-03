@@ -276,7 +276,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | `listDir(dir)` | List one folder: its recipes (loaded) and subfolders (with recursive recipe counts, no files opened) |
 | `countRecipes(dir)` | Count recipes under a folder by file name, without opening them |
 | `listMenusForDate(baseDirs, date)` | Find `.menu` files with a section header containing `date` |
-| `parseMenu(path, baseDirs, scale)` | Parse a `.menu` file into days, meals, and items, resolving recipe reference scales. References resolve against `baseDirs` (`<path>.cook`, then `<path>.menu`), not the menu's folder; `{=2}` is still multiplied by `scale`; missing recipes fall back silently to the raw quantity. Throws `MenuError` if `scale` is not finite or is `<= 0` |
+| `parseMenu(path, baseDirs, scale)` | Parse a `.menu` file into days, meals, and items, resolving recipe reference scales. References resolve against `baseDirs` (`<path>.cook`, then `<path>.menu`; `<path>` as-is if it already ends in `.menu`), not the menu's folder; `{=2}` is still multiplied by `scale`; missing recipes fall back silently to the raw quantity. Throws `MenuError` if `scale` is not finite or is `<= 0` |
 | `parseMenuContent(content, name)` | Parse menu text without resolving scales |
 | `libraryVersion()` | Get the library version string |
 
@@ -389,7 +389,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 
 | Variant | Fields | Description |
 |---------|--------|-------------|
-| `RecipeReference` | `name`, `path`, `quantity?`, `unit?`, `scale: Double?` | `@./Folder/Recipe{2}`; `path` has no `./` or `.cook`; `scale` is set by `parseMenu` |
+| `RecipeReference` | `name`, `path`, `quantity?`, `unit?`, `scale: Double?` | `@./Folder/Recipe{2}`; `path` is relative to the library root, with `./` and `.cook` stripped (a `.menu` suffix is kept); to load it, look up `<path>.cook` (or `<path>` if it ends in `.menu`) under the base dir rather than passing it to `getRecipe` (dotted names like "Mr. Smith's Stew" break its extension detection); `scale` is set by `parseMenu` |
 | `Ingredient` | `name`, `quantity?`, `unit?` | A loose ingredient; quantity as written |
 | `Text` | `text` | Connecting text such as ` with ` |
 | `Note` | `text` | A `-- comment` |

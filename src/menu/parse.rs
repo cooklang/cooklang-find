@@ -1043,6 +1043,14 @@ mod tests {
     }
 
     #[test]
+    fn menu_reference_keeps_menu_suffix() {
+        assert_eq!(
+            scan("@./Weekly.menu{4%servings}"),
+            vec![reference("Weekly.menu", Some("4"), Some("servings"))]
+        );
+    }
+
+    #[test]
     fn section_name_trims_markers() {
         assert_eq!(section_name("  == Day 1 ==  "), Some("Day 1"));
         assert_eq!(

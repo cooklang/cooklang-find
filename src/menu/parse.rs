@@ -124,15 +124,30 @@ impl Builder {
 
         let line = trimmed.strip_suffix('\\').unwrap_or(trimmed).trim_end();
         let line = strip_bullet(line);
-        match MealHeader::parse(line) {
+        let rest = match MealHeader::parse(line) {
             Some(header) => {
                 self.flush_meal();
                 self.meal.meal_type = Some(header.meal_type);
                 self.meal.time = header.time;
-                scan_items(header.rest, &mut self.meal.items);
+                header.rest
             }
-            None => scan_items(line, &mut self.meal.items),
+            None => line,
+        };
+        self.push_line_items(rest);
+    }
+
+    /// Scans one line's items into the current meal, separating them from
+    /// items of earlier lines with a [`MenuItem::LineBreak`].
+    fn push_line_items(&mut self, text: &str) {
+        let mut items = Vec::new();
+        scan_items(text, &mut items);
+        if items.is_empty() {
+            return;
         }
+        if !self.meal.items.is_empty() {
+            self.meal.items.push(MenuItem::LineBreak);
+        }
+        self.meal.items.append(&mut items);
     }
 
     fn start_section(&mut self, name: &str) {
@@ -386,7 +401,10 @@ mod tests {
 
     #[test]
     fn unbraced_ingredient_drops_trailing_period() {
-        assert_eq!(scan("@eggs."), vec![ingredient("eggs", None, None), text(".")]);
+        assert_eq!(
+            scan("@eggs."),
+            vec![ingredient("eggs", None, None), text(".")]
+        );
     }
 
     #[test]
@@ -414,13 +432,20 @@ mod tests {
     fn recipe_reference_with_spaces_and_servings() {
         assert_eq!(
             scan("@./Breakfast/Easy Pancakes{3%servings}"),
-            vec![reference("Breakfast/Easy Pancakes", Some("3"), Some("servings"))]
+            vec![reference(
+                "Breakfast/Easy Pancakes",
+                Some("3"),
+                Some("servings")
+            )]
         );
     }
 
     #[test]
     fn unbraced_recipe_reference() {
-        assert_eq!(scan("@./lamb-chops"), vec![reference("lamb-chops", None, None)]);
+        assert_eq!(
+            scan("@./lamb-chops"),
+            vec![reference("lamb-chops", None, None)]
+        );
     }
 
     #[test]
@@ -446,10 +471,7 @@ mod tests {
     fn inline_comment_becomes_note() {
         assert_eq!(
             scan("@./Risotto{} -- use leftover stock"),
-            vec![
-                reference("Risotto", None, None),
-                note("use leftover stock"),
-            ]
+            vec![reference("Risotto", None, None), note("use leftover stock"),]
         );
     }
 
@@ -536,6 +558,7 @@ mod tests {
                             None,
                             vec![
                                 reference("lamb-chops", None, None),
+                                MenuItem::LineBreak,
                                 note("save leftover lamb for sandwiches"),
                             ]
                         ),
@@ -549,6 +572,7 @@ mod tests {
                         None,
                         vec![
                             ingredient("almonds", Some("50"), Some("g")),
+                            MenuItem::LineBreak,
                             ingredient("dark chocolate", Some("30"), Some("g")),
                         ]
                     )],
@@ -645,7 +669,11 @@ mod tests {
 
         assert_eq!(
             menu.sections[0].meals,
-            vec![meal(Some("Lunch"), None, vec![reference("Soup", None, None)])]
+            vec![meal(
+                Some("Lunch"),
+                None,
+                vec![reference("Soup", None, None)]
+            )]
         );
     }
 
@@ -659,7 +687,10 @@ mod tests {
 
     #[test]
     fn block_comments_are_removed() {
-        let menu = Menu::parse("= Day 1\n[- @./Hidden{}\nstill hidden -]\n@./Shown{}\n", "m");
+        let menu = Menu::parse(
+            "= Day 1\n[- @./Hidden{}\nstill hidden -]\n@./Shown{}\n",
+            "m",
+        );
 
         assert_eq!(
             menu.sections[0].meals,
@@ -673,5 +704,47 @@ mod tests {
 
         assert_eq!(menu.name, "m");
         assert!(menu.sections.is_empty());
+    }
+
+    #[test]
+    fn line_breaks_separate_lines_of_a_meal() {
+        let menu = Menu::parse(
+            "= Day 1\nBreakfast: @eggs{2}\n- @syrup{}\n\n- @coffee{}\n-- strong\n",
+            "m",
+        );
+
+        assert_eq!(
+            menu.sections[0].meals,
+            vec![meal(
+                Some("Breakfast"),
+                None,
+                vec![
+                    ingredient("eggs", Some("2"), None),
+                    MenuItem::LineBreak,
+                    ingredient("syrup", None, None),
+                    MenuItem::LineBreak,
+                    ingredient("coffee", None, None),
+                    MenuItem::LineBreak,
+                    note("strong"),
+                ]
+            )]
+        );
+    }
+
+    #[test]
+    fn no_line_break_for_single_line_or_new_meal() {
+        let menu = Menu::parse("= Day 1\nBreakfast:\n- @eggs{}\nLunch: @soup{}\n", "m");
+
+        assert_eq!(
+            menu.sections[0].meals,
+            vec![
+                meal(
+                    Some("Breakfast"),
+                    None,
+                    vec![ingredient("eggs", None, None)]
+                ),
+                meal(Some("Lunch"), None, vec![ingredient("soup", None, None)]),
+            ]
+        );
     }
 }

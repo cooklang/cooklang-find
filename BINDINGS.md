@@ -393,6 +393,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | `Ingredient` | `name`, `quantity?`, `unit?` | A loose ingredient; quantity as written |
 | `Text` | `text` | Connecting text such as ` with ` |
 | `Note` | `text` | A `-- comment` |
+| `LineBreak` | — | Separates items written on different lines of the same meal; never first or last |
 
 ## CI/CD
 

@@ -73,6 +73,9 @@ pub enum MenuItem {
     Text { text: String },
     /// A `-- comment`.
     Note { text: String },
+    /// Separates items written on different lines of the same meal. Never
+    /// the first or last item of a meal.
+    LineBreak,
 }
 
 impl Menu {
@@ -238,5 +241,26 @@ mod tests {
         .unwrap();
 
         assert_eq!(json, serde_json::json!({"kind": "text", "text": "with"}));
+    }
+
+    #[test]
+    fn line_break_serializes_as_kind_only() {
+        let json = serde_json::to_value(MenuItem::LineBreak).unwrap();
+
+        assert_eq!(json, serde_json::json!({"kind": "line_break"}));
+    }
+
+    #[test]
+    fn recipe_references_ignore_line_breaks() {
+        let m = menu(vec![section(
+            "1",
+            None,
+            vec![reference("Soup"), MenuItem::LineBreak, reference("Bread")],
+        )]);
+
+        assert_eq!(
+            m.recipe_references(),
+            vec![&reference("Soup"), &reference("Bread")]
+        );
     }
 }

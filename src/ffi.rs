@@ -479,6 +479,8 @@ pub enum FfiMenuItem {
     Text { text: String },
     /// A `-- comment`
     Note { text: String },
+    /// Separates items written on different lines of the same meal
+    LineBreak,
 }
 
 impl From<&MenuItem> for FfiMenuItem {
@@ -508,6 +510,7 @@ impl From<&MenuItem> for FfiMenuItem {
             },
             MenuItem::Text { text } => FfiMenuItem::Text { text },
             MenuItem::Note { text } => FfiMenuItem::Note { text },
+            MenuItem::LineBreak => FfiMenuItem::LineBreak,
         }
     }
 }
@@ -1100,7 +1103,8 @@ mod tests {
             FfiMenuItem::RecipeReference { path, quantity, scale: None, .. }
                 if path == "Mains/Risotto" && quantity.as_deref() == Some("2")
         ));
-        assert!(matches!(&meal.items[3], FfiMenuItem::Note { text } if text == "grate fresh"));
+        assert!(matches!(&meal.items[3], FfiMenuItem::LineBreak));
+        assert!(matches!(&meal.items[4], FfiMenuItem::Note { text } if text == "grate fresh"));
     }
 
     #[test]

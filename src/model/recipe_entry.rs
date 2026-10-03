@@ -1,5 +1,6 @@
 use super::lossy::{lines_lossy, read_to_string_lossy};
 use super::metadata::{extract_and_parse_metadata, Metadata};
+use crate::menu::Menu;
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::glob;
 use regex::Regex;
@@ -328,6 +329,25 @@ impl RecipeEntry {
             RecipeSource::Path { path } => path.extension() == Some("menu"),
             RecipeSource::Content { .. } => false,
         })
+    }
+
+    /// Parses this entry as a [`Menu`].
+    ///
+    /// Returns `None` when the entry is not a `.menu` file, including for
+    /// content-backed entries, which are never menus.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RecipeEntryError::IoError` if the file cannot be read.
+    pub fn menu(&self) -> Option<Result<Menu, RecipeEntryError>> {
+        if !self.is_menu() {
+            return None;
+        }
+        let fallback_name = self.name().clone().unwrap_or_default();
+        Some(
+            self.content()
+                .map(|content| Menu::parse(&content, &fallback_name)),
+        )
     }
 
     /// Returns all step and section images for the recipe.

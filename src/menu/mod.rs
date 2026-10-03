@@ -1,12 +1,20 @@
-//! Menu discovery by date.
+//! Menu files: discovery by date and structured parsing.
 //!
-//! This module finds Cooklang `.menu` files that are "active" on a given date.
-//! A menu file is active for a date when one of its section headers contains
-//! that date string (for example, a section `= 2026-06-24 Dinner` makes the
-//! file active for `2026-06-24`).
+//! [`list_menus_for_date`] finds `.menu` files that are "active" on a given
+//! date. A menu file is active for a date when one of its section headers
+//! contains that date string (for example, a section `= 2026-06-24 Dinner`
+//! makes the file active for `2026-06-24`).
+//!
+//! [`Menu`] is the structured form of a menu: sections, meals, and items.
 //!
 //! The library performs no date parsing or timezone handling: the caller
 //! supplies the date as an opaque string that is matched literally.
+
+mod model;
+mod parse;
+mod scale;
+
+pub use model::{Menu, MenuItem, MenuMeal, MenuSection};
 
 use crate::model::lossy::read_to_string_lossy;
 use crate::model::RecipeEntry;
@@ -34,12 +42,7 @@ pub enum MenuError {
 /// whitespace (handles both `= Name` and `== Name ==` forms). The `date` is
 /// matched as a literal substring of that name.
 fn section_header_contains_date(line: &str, date: &str) -> bool {
-    let trimmed = line.trim();
-    if !trimmed.starts_with('=') {
-        return false;
-    }
-    let name = trimmed.trim_matches('=').trim();
-    name.contains(date)
+    parse::section_name(line).is_some_and(|name| name.contains(date))
 }
 
 /// Returns all `.menu` files under `base_dirs` that have a section header
@@ -273,5 +276,29 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].path().unwrap(), &dir.join("week.menu"));
+    }
+
+    #[test]
+    fn recipe_entry_menu_parses_menu_files() {
+        let (_t, dir) = temp_dir();
+        write_file(
+            &dir,
+            "week.menu",
+            "= Day 1 (2026-06-24)\nDinner:\n- @./Stew{}\n",
+        );
+        write_file(&dir, "stew.cook", "@beef{}\n");
+
+        let menu = RecipeEntry::from_path(dir.join("week.menu"))
+            .unwrap()
+            .menu()
+            .unwrap()
+            .unwrap();
+        let not_menu = RecipeEntry::from_path(dir.join("stew.cook"))
+            .unwrap()
+            .menu();
+
+        assert_eq!(menu.name, "week");
+        assert_eq!(menu.dates(), vec!["2026-06-24"]);
+        assert!(not_menu.is_none());
     }
 }

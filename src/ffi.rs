@@ -4,7 +4,10 @@
 //! Complex types are converted to simpler representations suitable for FFI.
 
 use crate::fetcher::{get_recipe_str, FetchError};
-use crate::menu::{list_menus_for_date as list_menus_for_date_internal, MenuError};
+use crate::menu::{
+    list_menus_for_date as list_menus_for_date_internal, Menu, MenuError, MenuItem, MenuMeal,
+    MenuSection,
+};
 use crate::model::{Metadata, RecipeEntry, RecipeEntryError, StepImageCollection};
 use crate::search::{
     search as search_internal, search_with_filter as search_with_filter_internal, MetadataFilter,
@@ -414,6 +417,146 @@ pub struct FfiDirListing {
     pub entries: Vec<FfiDirEntry>,
 }
 
+/// FFI-safe representation of a parsed `.menu` file.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiMenu {
+    /// Frontmatter title, else the file name
+    pub name: String,
+    /// Menu frontmatter
+    pub metadata: FfiMetadata,
+    /// Sections (usually days) in file order
+    pub sections: Vec<FfiMenuSection>,
+    /// Distinct section dates in file order
+    pub dates: Vec<String>,
+    /// Earliest section date
+    pub first_date: Option<String>,
+    /// Latest section date
+    pub last_date: Option<String>,
+    /// Recipe references, deduplicated by path, in first-seen order.
+    ///
+    /// Each path keeps its first occurrence's quantity and scale. Iterate
+    /// `sections` for every occurrence's own scale (e.g. shopping lists).
+    pub recipe_references: Vec<FfiMenuItem>,
+}
+
+/// A section (usually a day) of a menu.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiMenuSection {
+    /// Header text; `None` for content before the first header
+    pub name: Option<String>,
+    /// First `YYYY-MM-DD` in the header
+    pub date: Option<String>,
+    /// Meals in file order
+    pub meals: Vec<FfiMenuMeal>,
+}
+
+/// A meal within a menu section.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiMenuMeal {
+    /// e.g. "Breakfast"; `None` for items before the first meal heading
+    pub meal_type: Option<String>,
+    /// Time as written, `H:MM` or `HH:MM`, from a heading like `Breakfast (08:30):`
+    pub time: Option<String>,
+    /// Items in file order
+    pub items: Vec<FfiMenuItem>,
+}
+
+/// One entry of a menu meal.
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum FfiMenuItem {
+    /// A reference to another recipe
+    RecipeReference {
+        name: String,
+        path: String,
+        quantity: Option<String>,
+        unit: Option<String>,
+        scale: Option<f64>,
+    },
+    /// A loose ingredient
+    Ingredient {
+        name: String,
+        quantity: Option<String>,
+        unit: Option<String>,
+    },
+    /// Connecting text
+    Text { text: String },
+    /// A `-- comment`
+    Note { text: String },
+    /// Separates items written on different lines of the same meal
+    LineBreak,
+}
+
+impl From<&MenuItem> for FfiMenuItem {
+    fn from(item: &MenuItem) -> Self {
+        match item.clone() {
+            MenuItem::RecipeReference {
+                name,
+                path,
+                quantity,
+                unit,
+                scale,
+            } => FfiMenuItem::RecipeReference {
+                name,
+                path,
+                quantity,
+                unit,
+                scale,
+            },
+            MenuItem::Ingredient {
+                name,
+                quantity,
+                unit,
+            } => FfiMenuItem::Ingredient {
+                name,
+                quantity,
+                unit,
+            },
+            MenuItem::Text { text } => FfiMenuItem::Text { text },
+            MenuItem::Note { text } => FfiMenuItem::Note { text },
+            MenuItem::LineBreak => FfiMenuItem::LineBreak,
+        }
+    }
+}
+
+impl From<&MenuMeal> for FfiMenuMeal {
+    fn from(meal: &MenuMeal) -> Self {
+        FfiMenuMeal {
+            meal_type: meal.meal_type.clone(),
+            time: meal.time.clone(),
+            items: meal.items.iter().map(FfiMenuItem::from).collect(),
+        }
+    }
+}
+
+impl From<&MenuSection> for FfiMenuSection {
+    fn from(section: &MenuSection) -> Self {
+        FfiMenuSection {
+            name: section.name.clone(),
+            date: section.date.clone(),
+            meals: section.meals.iter().map(FfiMenuMeal::from).collect(),
+        }
+    }
+}
+
+impl From<&Menu> for FfiMenu {
+    fn from(menu: &Menu) -> Self {
+        let range = menu.date_range();
+        FfiMenu {
+            name: menu.name.clone(),
+            metadata: FfiMetadata::from(&menu.metadata),
+            sections: menu.sections.iter().map(FfiMenuSection::from).collect(),
+            dates: menu.dates().into_iter().map(str::to_string).collect(),
+            first_date: range.map(|(first, _)| first.to_string()),
+            last_date: range.map(|(_, last)| last.to_string()),
+            recipe_references: menu
+                .recipe_references()
+                .into_iter()
+                .map(FfiMenuItem::from)
+                .collect(),
+        }
+    }
+}
+
 // ============================================================================
 // Exported FFI Functions
 // ============================================================================
@@ -552,6 +695,53 @@ pub fn list_menus_for_date(
         .into_iter()
         .map(|r| Arc::new(FfiRecipeEntry::new(r)))
         .collect())
+}
+
+/// Parses a `.menu` file and resolves its recipe reference scales.
+///
+/// Reference paths resolve against `base_dirs` (the library root), not the
+/// menu's own folder; each is looked up as `<path>.cook`, then
+/// `<path>.menu` (or as-is when the path already ends in `.menu`). A fixed quantity (`{=2}`) is still multiplied by `scale`,
+/// matching CookCLI. Missing recipes or metadata fall back silently to the
+/// raw quantity.
+///
+/// # Arguments
+/// * `path` - Path to the `.menu` file
+/// * `base_dirs` - Directories to look up referenced recipes in
+/// * `scale` - Multiplier applied to the whole menu (1.0 for as written);
+///   must be finite and greater than 0
+///
+/// # Returns
+/// The parsed menu, or `CooklangError::MenuError` if `scale` is invalid or
+/// the file isn't a menu, or an error if the file cannot be read.
+#[uniffi::export]
+pub fn parse_menu(
+    path: String,
+    base_dirs: Vec<String>,
+    scale: f64,
+) -> Result<FfiMenu, CooklangError> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(CooklangError::MenuError {
+            reason: format!("Menu scale must be a finite number greater than 0, got {scale}"),
+        });
+    }
+    let entry = RecipeEntry::from_path(path.clone().into())?;
+    let mut menu = entry.menu().ok_or_else(|| CooklangError::MenuError {
+        reason: format!("Not a menu file: {path}"),
+    })??;
+    let dirs: Vec<Utf8PathBuf> = base_dirs.into_iter().map(Utf8PathBuf::from).collect();
+    menu.resolve_scales(&dirs, scale);
+    Ok(FfiMenu::from(&menu))
+}
+
+/// Parses menu content without resolving recipe reference scales.
+///
+/// # Arguments
+/// * `content` - The menu text, including any YAML frontmatter
+/// * `name` - Name to use when the frontmatter has no title
+#[uniffi::export]
+pub fn parse_menu_content(content: String, name: String) -> FfiMenu {
+    FfiMenu::from(&Menu::parse(&content, &name))
 }
 
 /// Builds a hierarchical tree of all recipes in a directory.
@@ -897,5 +1087,82 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert!(files.iter().any(|f| f.ends_with("Hollandaise.cook")));
         assert!(files.iter().any(|f| f.ends_with("Hollandaise.jpg")));
+    }
+
+    #[test]
+    fn test_parse_menu_content() {
+        let content = indoc! {r"
+            ---
+            title: Week
+            ---
+            = Mon (2026-03-09)
+            Dinner (19:00):
+            - @./Mains/Risotto{2} with @parmesan{30%g}
+            -- grate fresh
+            = Tue (2026-03-10)
+            Dinner:
+            - @./Mains/Risotto{}
+        "};
+
+        let menu = parse_menu_content(content.to_string(), "fallback".to_string());
+
+        assert_eq!(menu.name, "Week");
+        assert_eq!(menu.dates, vec!["2026-03-09", "2026-03-10"]);
+        assert_eq!(menu.first_date.as_deref(), Some("2026-03-09"));
+        assert_eq!(menu.last_date.as_deref(), Some("2026-03-10"));
+        assert_eq!(menu.recipe_references.len(), 1);
+        let meal = &menu.sections[0].meals[0];
+        assert_eq!(meal.meal_type.as_deref(), Some("Dinner"));
+        assert_eq!(meal.time.as_deref(), Some("19:00"));
+        assert!(matches!(
+            &meal.items[0],
+            FfiMenuItem::RecipeReference { path, quantity, scale: None, .. }
+                if path == "Mains/Risotto" && quantity.as_deref() == Some("2")
+        ));
+        assert!(matches!(&meal.items[3], FfiMenuItem::LineBreak));
+        assert!(matches!(&meal.items[4], FfiMenuItem::Note { text } if text == "grate fresh"));
+    }
+
+    #[test]
+    fn test_parse_menu_resolves_scales() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path().to_str().unwrap();
+        create_test_recipe(dir, "Pancakes", "---\nservings: 2\n---\n@flour{}\n");
+        let menu_path = format!("{dir}/week.menu");
+        fs::write(&menu_path, "= Day 1\n@./Pancakes{6%servings}\n").unwrap();
+
+        let menu = parse_menu(menu_path, vec![dir.to_string()], 1.0).unwrap();
+
+        assert!(matches!(
+            &menu.recipe_references[0],
+            FfiMenuItem::RecipeReference { scale: Some(s), .. } if (s - 3.0).abs() < 1e-9
+        ));
+    }
+
+    #[test]
+    fn test_parse_menu_rejects_invalid_scale() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path().to_str().unwrap();
+        let menu_path = format!("{dir}/week.menu");
+        fs::write(&menu_path, "= Day 1\n@./Pancakes{2}\n").unwrap();
+
+        for scale in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 0.0] {
+            let result = parse_menu(menu_path.clone(), vec![dir.to_string()], scale);
+            assert!(
+                matches!(result, Err(CooklangError::MenuError { .. })),
+                "scale {scale}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_menu_rejects_recipe_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path().to_str().unwrap();
+        let path = create_test_recipe(dir, "Pancakes", "@flour{}\n");
+
+        let result = parse_menu(path, vec![dir.to_string()], 1.0);
+
+        assert!(matches!(result, Err(CooklangError::MenuError { .. })));
     }
 }

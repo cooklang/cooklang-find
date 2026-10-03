@@ -63,12 +63,23 @@ struct RecipeSize {
 }
 
 impl RecipeSize {
+    /// Loads `<path>.cook`, then `<path>.menu`, from each base dir in turn.
+    ///
+    /// The extension is appended explicitly (rather than letting
+    /// `get_recipe` guess) so a dotted name like `Mr. Smith's Stew` is not
+    /// mistaken for one with an extension.
     fn load<P: AsRef<Utf8Path>>(base_dirs: &[P], path: &str) -> Self {
-        let file = format!("{path}.cook");
-        match get_recipe(base_dirs.iter().map(|d| d.as_ref()), Utf8Path::new(&file)) {
-            Ok(entry) => Self::from_metadata(entry.metadata()),
-            Err(_) => Self::default(),
-        }
+        let candidates = [format!("{path}.cook"), format!("{path}.menu")];
+        base_dirs
+            .iter()
+            .flat_map(|dir| {
+                candidates
+                    .iter()
+                    .map(move |file| (dir.as_ref(), Utf8Path::new(file)))
+            })
+            .find_map(|(dir, file)| get_recipe([dir], file).ok())
+            .map(|entry| Self::from_metadata(entry.metadata()))
+            .unwrap_or_default()
     }
 
     fn from_metadata(metadata: &Metadata) -> Self {
@@ -256,6 +267,37 @@ mod tests {
     fn missing_recipe_is_raw() {
         let (_t, dir) = recipes_dir();
         assert_eq!(resolve("@./Nope{4%servings}", &dir, 1.0), vec![Some(4.0)]);
+    }
+
+    #[test]
+    fn menu_reference_falls_back_to_menu_file() {
+        let (_t, dir) = recipes_dir();
+        fs::write(dir.join("Sub.menu"), "---\nservings: 2\n---\n= Day\n").unwrap();
+        assert_eq!(resolve("@./Sub{4%servings}", &dir, 1.0), vec![Some(2.0)]);
+    }
+
+    #[test]
+    fn cook_file_wins_over_menu_file() {
+        let (_t, dir) = recipes_dir();
+        fs::write(dir.join("Pancakes.menu"), "---\nservings: 4\n---\n= Day\n").unwrap();
+        assert_eq!(
+            resolve("@./Pancakes{4%servings}", &dir, 1.0),
+            vec![Some(2.0)]
+        );
+    }
+
+    #[test]
+    fn dotted_reference_name_is_not_an_extension() {
+        let (_t, dir) = recipes_dir();
+        fs::write(
+            dir.join("Mr. Smith's Stew.cook"),
+            "---\nservings: 4\n---\n@beef{}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            resolve("@./Mr. Smith's Stew{8%servings}", &dir, 1.0),
+            vec![Some(2.0)]
+        );
     }
 
     #[test]

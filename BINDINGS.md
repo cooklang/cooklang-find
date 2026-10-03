@@ -275,6 +275,9 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | `buildTree(baseDir)` | Build a hierarchical tree of recipes (reads every recipe in the subtree) |
 | `listDir(dir)` | List one folder: its recipes (loaded) and subfolders (with recursive recipe counts, no files opened) |
 | `countRecipes(dir)` | Count recipes under a folder by file name, without opening them |
+| `listMenusForDate(baseDirs, date)` | Find `.menu` files with a section header containing `date` |
+| `parseMenu(path, baseDirs, scale)` | Parse a `.menu` file into days, meals, and items, resolving recipe reference scales |
+| `parseMenuContent(content, name)` | Parse menu text without resolving scales |
 | `libraryVersion()` | Get the library version string |
 
 ### Types
@@ -354,6 +357,42 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 |---------|--------|-------------|
 | `Recipe` | `recipe: FfiRecipeEntry` | A .cook/.menu file directly in the folder |
 | `Folder` | `name: String`, `path: String`, `recipeCount: UInt` | A subfolder; `recipeCount` includes nested recipes and files not downloaded yet |
+
+#### FfiMenu
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `String` | Frontmatter title, else the file name |
+| `metadata` | `FfiMetadata` | Menu frontmatter |
+| `sections` | `List<FfiMenuSection>` | Sections (usually days) in file order |
+| `dates` | `List<String>` | Distinct section dates in file order |
+| `firstDate` / `lastDate` | `String?` | Earliest / latest section date |
+| `recipeReferences` | `List<FfiMenuItem>` | Recipe references, deduplicated by path |
+
+#### FfiMenuSection
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `String?` | Header text, e.g. `Saturday (2026-03-07)`; null before the first header |
+| `date` | `String?` | First `YYYY-MM-DD` in the header |
+| `meals` | `List<FfiMenuMeal>` | Meals in file order |
+
+#### FfiMenuMeal
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mealType` | `String?` | e.g. `Breakfast`; null for items before the first meal heading |
+| `time` | `String?` | `HH:MM` from a heading like `Breakfast (08:30):` |
+| `items` | `List<FfiMenuItem>` | Items in file order |
+
+#### FfiMenuItem
+
+| Variant | Fields | Description |
+|---------|--------|-------------|
+| `RecipeReference` | `name`, `path`, `quantity?`, `unit?`, `scale: Double?` | `@./Folder/Recipe{2}`; `path` has no `./` or `.cook`; `scale` is set by `parseMenu` |
+| `Ingredient` | `name`, `quantity?`, `unit?` | A loose ingredient; quantity as written |
+| `Text` | `text` | Connecting text such as ` with ` |
+| `Note` | `text` | A `-- comment` |
 
 ## CI/CD
 

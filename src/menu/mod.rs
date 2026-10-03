@@ -282,4 +282,28 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].path().unwrap(), &dir.join("week.menu"));
     }
+
+    #[test]
+    fn recipe_entry_menu_parses_menu_files() {
+        let (_t, dir) = temp_dir();
+        write_file(
+            &dir,
+            "week.menu",
+            "= Day 1 (2026-06-24)\nDinner:\n- @./Stew{}\n",
+        );
+        write_file(&dir, "stew.cook", "@beef{}\n");
+
+        let menu = RecipeEntry::from_path(dir.join("week.menu"))
+            .unwrap()
+            .menu()
+            .unwrap()
+            .unwrap();
+        let not_menu = RecipeEntry::from_path(dir.join("stew.cook"))
+            .unwrap()
+            .menu();
+
+        assert_eq!(menu.name, "week");
+        assert_eq!(menu.dates(), vec!["2026-06-24"]);
+        assert!(not_menu.is_none());
+    }
 }

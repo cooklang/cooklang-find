@@ -273,7 +273,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | `search(baseDir, query)` | Search for recipes matching a query |
 | `searchWithMetadataFilter(baseDir, query, filterJson)` | Search matching a query, keeping only recipes whose frontmatter satisfies a metadata filter (JSON grammar; empty `query` is a pure, frontmatter-only filter) |
 | `buildTree(baseDir)` | Build a hierarchical tree of recipes (reads every recipe in the subtree) |
-| `listDir(dir)` | List one folder: its recipes (loaded) and subfolders (with recursive recipe counts, no files opened) |
+| `listDir(dir)` | List one folder without opening any file: its recipes (each reads its frontmatter on the first `name()`, `metadata()`, `titleImage()` or `tags()` call; `path()`, `fileName()`, `isMenu()` never do) and subfolders (with recursive recipe counts) |
 | `countRecipes(dir)` | Count recipes under a folder by file name, without opening them |
 | `listMenusForDate(baseDirs, date)` | Find `.menu` files with a section header containing `date` |
 | `parseMenu(path, baseDirs, scale)` | Parse a `.menu` file into days, meals, and items, resolving recipe reference scales. References resolve against `baseDirs` (`<path>.cook`, then `<path>.menu`; `<path>` as-is if it already ends in `.menu`), not the menu's folder; `{=2}` is still multiplied by `scale`; missing recipes fall back silently to the raw quantity. Throws `MenuError` if `path` is not a `.menu` file, or if `scale` is not finite or is `<= 0` |
@@ -355,7 +355,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 
 | Variant | Fields | Description |
 |---------|--------|-------------|
-| `Recipe` | `recipe: FfiRecipeEntry` | A .cook/.menu file directly in the folder |
+| `Recipe` | `recipe: FfiRecipeEntry` | A .cook/.menu file directly in the folder, read lazily; listed even if its content can't be read (empty metadata) |
 | `Folder` | `name: String`, `path: String`, `recipeCount: UInt` | A subfolder; `recipeCount` includes nested recipes and files not downloaded yet |
 
 #### FfiMenu

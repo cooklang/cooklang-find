@@ -115,41 +115,66 @@ pub enum RecipeSource {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(from = "RecipeEntryData", into = "RecipeEntryData")]
 pub struct RecipeEntry {
     /// Source of the recipe (path or content)
     source: RecipeSource,
-    /// Cached metadata
-    metadata: Metadata,
+    /// Metadata; read on first access for entries from `from_path_lazy`
+    metadata: OnceLock<Metadata>,
 
     /// Cached name of the recipe (from file stem, title, or provided name)
-    #[serde(skip)]
     name: OnceLock<Option<String>>,
     /// Optional path or URL to the title image
-    #[serde(skip)]
     title_image: OnceLock<Option<String>>,
     /// Cached step and section images
-    #[serde(skip)]
     step_images: OnceLock<StepImageCollection>,
     /// Whether this is a menu file (*.menu) rather than a regular recipe
-    #[serde(skip)]
     is_menu: OnceLock<bool>,
+}
+
+/// Serialized form of a [`RecipeEntry`]: its source and metadata.
+#[derive(Serialize, Deserialize)]
+struct RecipeEntryData {
+    source: RecipeSource,
+    metadata: Metadata,
+}
+
+impl From<RecipeEntry> for RecipeEntryData {
+    fn from(entry: RecipeEntry) -> Self {
+        let metadata = entry.metadata().clone();
+        RecipeEntryData {
+            source: entry.source,
+            metadata,
+        }
+    }
+}
+
+impl From<RecipeEntryData> for RecipeEntry {
+    fn from(data: RecipeEntryData) -> Self {
+        RecipeEntry::new(data.source, OnceLock::from(data.metadata))
+    }
 }
 
 impl Clone for RecipeEntry {
     fn clone(&self) -> Self {
+        // Metadata is kept if it was loaded; derived fields are recomputed
+        // on demand.
+        RecipeEntry::new(self.source.clone(), self.metadata.clone())
+    }
+}
+
+impl RecipeEntry {
+    fn new(source: RecipeSource, metadata: OnceLock<Metadata>) -> Self {
         RecipeEntry {
-            source: self.source.clone(),
-            metadata: self.metadata.clone(),
-            // Reset cached fields - they will be recomputed on demand
+            source,
+            metadata,
             name: OnceLock::new(),
             title_image: OnceLock::new(),
             step_images: OnceLock::new(),
             is_menu: OnceLock::new(),
         }
     }
-}
 
-impl RecipeEntry {
     /// Creates a new `RecipeEntry` from a file path.
     ///
     /// Reads the recipe file, extracts metadata from YAML frontmatter,
@@ -167,21 +192,31 @@ impl RecipeEntry {
     /// - The file cannot be read
     /// - The metadata cannot be parsed
     pub fn from_path(path: Utf8PathBuf) -> Result<Self, RecipeEntryError> {
-        let file = File::open(&path).map_err(RecipeEntryError::IoError)?;
-        let reader = BufReader::new(file);
+        let metadata = read_metadata(&path)?;
+        Ok(RecipeEntry::new(
+            RecipeSource::Path { path },
+            OnceLock::from(metadata),
+        ))
+    }
 
-        let metadata = extract_and_parse_metadata(
-            lines_lossy(reader).map(|r| r.map_err(RecipeEntryError::IoError)),
-        )?;
-
-        Ok(RecipeEntry {
-            source: RecipeSource::Path { path },
-            metadata,
-            name: OnceLock::new(),
-            title_image: OnceLock::new(),
-            step_images: OnceLock::new(),
-            is_menu: OnceLock::new(),
-        })
+    /// Creates a `RecipeEntry` for a file without opening it.
+    ///
+    /// The frontmatter is read on the first call that needs it
+    /// ([`metadata`](Self::metadata), [`name`](Self::name),
+    /// [`title_image`](Self::title_image), [`tags`](Self::tags)) and cached.
+    /// [`path`](Self::path), [`file_name`](Self::file_name) and
+    /// [`is_menu`](Self::is_menu) never touch the file.
+    ///
+    /// Use this when listing many files of which only a few will be shown,
+    /// or when opening a file is expensive (iCloud / File Provider
+    /// placeholders). If the file can't be read when its metadata is first
+    /// needed, the metadata is empty, as for a file without frontmatter.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to the recipe file (.cook or .menu)
+    pub fn from_path_lazy(path: Utf8PathBuf) -> Self {
+        RecipeEntry::new(RecipeSource::Path { path }, OnceLock::new())
     }
 
     /// Creates a new `RecipeEntry` from string content.
@@ -204,14 +239,10 @@ impl RecipeEntry {
                 .map(|line| Ok::<_, RecipeEntryError>(line.to_string())),
         )?;
 
-        Ok(RecipeEntry {
-            source: RecipeSource::Content { content, name },
-            metadata,
-            name: OnceLock::new(),
-            title_image: OnceLock::new(),
-            step_images: OnceLock::new(),
-            is_menu: OnceLock::new(),
-        })
+        Ok(RecipeEntry::new(
+            RecipeSource::Content { content, name },
+            OnceLock::from(metadata),
+        ))
     }
 
     /// Returns the name of the recipe.
@@ -224,7 +255,7 @@ impl RecipeEntry {
     /// The result is cached after the first call.
     pub fn name(&self) -> &Option<String> {
         self.name.get_or_init(|| {
-            if let Some(title) = self.metadata.title() {
+            if let Some(title) = self.metadata().title() {
                 Some(title.to_string())
             } else {
                 match &self.source {
@@ -247,7 +278,7 @@ impl RecipeEntry {
     pub fn title_image(&self) -> &Option<String> {
         self.title_image.get_or_init(|| {
             // First check metadata for image URLs
-            if let Some(url) = self.metadata.image_url() {
+            if let Some(url) = self.metadata().image_url() {
                 return Some(url);
             }
 
@@ -285,8 +316,15 @@ impl RecipeEntry {
     /// The metadata contains all fields from the YAML frontmatter,
     /// providing access to both standard fields (title, servings, tags)
     /// and any custom fields defined in the recipe.
+    ///
+    /// For an entry from [`from_path_lazy`](Self::from_path_lazy), the first
+    /// call reads the file; if it can't be read, the metadata is empty.
     pub fn metadata(&self) -> &Metadata {
-        &self.metadata
+        self.metadata.get_or_init(|| match &self.source {
+            RecipeSource::Path { path } => read_metadata(path).unwrap_or_default(),
+            // Content entries always parse their metadata when created.
+            RecipeSource::Content { .. } => Metadata::default(),
+        })
     }
 
     /// Returns the file path if this recipe is backed by a file.
@@ -317,7 +355,7 @@ impl RecipeEntry {
     ///
     /// Returns an empty vector if no tags are defined.
     pub fn tags(&self) -> Vec<String> {
-        self.metadata.tags()
+        self.metadata().tags()
     }
 
     /// Checks if this entry represents a menu file.
@@ -438,6 +476,14 @@ pub enum RecipeEntryError {
 
     #[error("Failed to parse recipe metadata: {0}")]
     MetadataError(String),
+}
+
+/// Reads and parses the YAML frontmatter of the file at `path`.
+fn read_metadata(path: &Utf8Path) -> Result<Metadata, RecipeEntryError> {
+    let file = File::open(path).map_err(RecipeEntryError::IoError)?;
+    extract_and_parse_metadata(
+        lines_lossy(BufReader::new(file)).map(|r| r.map_err(RecipeEntryError::IoError)),
+    )
 }
 
 fn find_title_image(path: &Utf8Path) -> Option<Utf8PathBuf> {
@@ -654,7 +700,7 @@ fn collect_related_files(
 mod tests {
     use super::*;
     use indoc::indoc;
-    use std::fs::File;
+    use std::fs::{self, File};
     use std::io::Write;
     use tempfile::TempDir;
 
@@ -767,7 +813,7 @@ mod tests {
         let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", content);
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let metadata = &recipe.metadata;
+        let metadata = recipe.metadata();
 
         assert_eq!(metadata.get("servings").unwrap().as_i64().unwrap(), 4);
         assert_eq!(metadata.get("time").unwrap().as_str().unwrap(), "30 min");
@@ -1489,5 +1535,89 @@ mod tests {
         let content = "Serve @./sauces/Hollandaise.";
         let refs = extract_recipe_references(content);
         assert_eq!(refs, vec!["./sauces/Hollandaise"]);
+    }
+
+    fn temp_dir() -> (TempDir, Utf8PathBuf) {
+        let temp_dir = TempDir::new().unwrap();
+        let path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        (temp_dir, path)
+    }
+
+    #[test]
+    fn lazy_entry_does_not_open_the_file() {
+        let (_tmp, dir) = temp_dir();
+        let missing = dir.join("Week Plan.menu");
+
+        let entry = RecipeEntry::from_path_lazy(missing.clone());
+
+        assert_eq!(entry.path(), Some(&missing));
+        assert_eq!(entry.file_name().as_deref(), Some("Week Plan.menu"));
+        assert!(entry.is_menu());
+    }
+
+    #[test]
+    fn lazy_entry_reads_metadata_on_first_access_and_caches_it() {
+        let (_tmp, dir) = temp_dir();
+        let path = create_test_recipe(&dir, "pancakes", "---\ntitle: Before\n---\n");
+        let entry = RecipeEntry::from_path_lazy(path.clone());
+
+        // Written after the entry was made: the entry hasn't read the file yet.
+        fs::write(&path, "---\ntitle: First read\ntags: [quick]\n---\n").unwrap();
+        assert_eq!(entry.metadata().title(), Some("First read"));
+
+        // Written after the first access: the cached metadata is kept.
+        fs::write(&path, "---\ntitle: Second read\n---\n").unwrap();
+        assert_eq!(entry.metadata().title(), Some("First read"));
+        assert_eq!(entry.name().as_deref(), Some("First read"));
+        assert_eq!(entry.tags(), vec!["quick"]);
+    }
+
+    #[test]
+    fn lazy_entry_for_unreadable_file_has_empty_metadata() {
+        let (_tmp, dir) = temp_dir();
+        let entry = RecipeEntry::from_path_lazy(dir.join("gone.cook"));
+
+        assert_eq!(entry.metadata(), &Metadata::default());
+        assert_eq!(entry.name().as_deref(), Some("gone"));
+        assert_eq!(entry.title_image(), &None);
+    }
+
+    #[test]
+    fn lazy_entry_title_image_comes_from_metadata() {
+        let (_tmp, dir) = temp_dir();
+        let path = create_test_recipe(&dir, "cake", "---\nimage: https://x.test/cake.jpg\n---\n");
+
+        let entry = RecipeEntry::from_path_lazy(path);
+
+        assert_eq!(
+            entry.title_image().as_deref(),
+            Some("https://x.test/cake.jpg")
+        );
+    }
+
+    #[test]
+    fn lazy_entry_serializes_with_its_metadata() {
+        let (_tmp, dir) = temp_dir();
+        let path = create_test_recipe(&dir, "soup", "---\nservings: 4\n---\n");
+        let lazy = RecipeEntry::from_path_lazy(path.clone());
+        let eager = RecipeEntry::from_path(path).unwrap();
+
+        let lazy_json = serde_json::to_value(&lazy).unwrap();
+
+        assert_eq!(lazy_json, serde_json::to_value(&eager).unwrap());
+        assert_eq!(lazy_json["metadata"]["servings"], 4);
+        let back: RecipeEntry = serde_json::from_value(lazy_json).unwrap();
+        assert_eq!(back.metadata().servings(), Some(4));
+    }
+
+    #[test]
+    fn clone_keeps_loaded_metadata() {
+        let (_tmp, dir) = temp_dir();
+        let path = create_test_recipe(&dir, "stew", "---\ntitle: Stew\n---\n");
+        let entry = RecipeEntry::from_path_lazy(path.clone());
+        assert_eq!(entry.metadata().title(), Some("Stew"));
+        fs::write(&path, "---\ntitle: Changed\n---\n").unwrap();
+
+        assert_eq!(entry.clone().metadata().title(), Some("Stew"));
     }
 }

@@ -239,7 +239,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-To find which menus cover a day, use `list_menus_for_date(&[dir], "2026-03-07")`.
+To find the menus for a range of days, parsed in one walk, use
+`list_menus_between(&[dir], "2026-03-07", "2026-03-08")`; each match carries the
+file's `path` and its `menu`.
 On iOS and Android, `parseMenu(path, baseDirs, scale)` returns the same
 structure as `FfiMenu`, with `dates`, `firstDate`, `lastDate` and
 `recipeReferences` precomputed (see [BINDINGS.md](BINDINGS.md)).
@@ -280,7 +282,8 @@ Add @salt{1%tsp} to taste.
 - Recipe references, loose ingredients, connecting text, notes, line breaks
 - Reference scaling per the Cooklang spec (`{2}`, `{4%servings}`, `{500%ml}`)
 - Date helpers: `sections_for_date`, `dates`, `date_range`
-- Find menus for a day with `list_menus_for_date`
+- Find menus for a date range with `list_menus_between` (or a single day with
+  `list_menus_for_date`)
 
 ### Metadata Support
 - Parse frontmatter metadata

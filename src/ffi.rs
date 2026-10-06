@@ -5,6 +5,7 @@
 
 use crate::fetcher::{get_recipe_str, FetchError};
 use crate::menu::{
+    list_menus_between as list_menus_between_internal,
     list_menus_for_date as list_menus_for_date_internal, Menu, MenuError, MenuItem, MenuMeal,
     MenuSection,
 };
@@ -417,6 +418,15 @@ pub struct FfiDirListing {
     pub entries: Vec<FfiDirEntry>,
 }
 
+/// A menu file found by `list_menus_between`, with its parsed content.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiMenuMatch {
+    /// Path of the `.menu` file
+    pub path: String,
+    /// Parsed menu; scales are not resolved
+    pub menu: FfiMenu,
+}
+
 /// FFI-safe representation of a parsed `.menu` file.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct FfiMenu {
@@ -694,6 +704,36 @@ pub fn list_menus_for_date(
     Ok(results
         .into_iter()
         .map(|r| Arc::new(FfiRecipeEntry::new(r)))
+        .collect())
+}
+
+/// Lists menu files with a section dated between `from` and `to`
+/// (inclusive), each with its parsed menu, in one walk.
+///
+/// A section's date is the first `YYYY-MM-DD` in its header; dates compare
+/// as strings. Each file is read once and no referenced recipe is opened
+/// (scales are not resolved). Pass the same date twice for a single day.
+///
+/// # Arguments
+/// * `base_dirs` - Root directories to scan
+/// * `from` - First date of the range (e.g. "2026-06-24")
+/// * `to` - Last date of the range (e.g. "2026-06-25")
+///
+/// # Returns
+/// The matching menus with their paths.
+#[uniffi::export]
+pub fn list_menus_between(
+    base_dirs: Vec<String>,
+    from: String,
+    to: String,
+) -> Result<Vec<FfiMenuMatch>, CooklangError> {
+    let dirs: Vec<Utf8PathBuf> = base_dirs.into_iter().map(Utf8PathBuf::from).collect();
+    Ok(list_menus_between_internal(&dirs, &from, &to)?
+        .iter()
+        .map(|m| FfiMenuMatch {
+            path: m.path.to_string(),
+            menu: FfiMenu::from(&m.menu),
+        })
         .collect())
 }
 
@@ -1109,6 +1149,28 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert!(files.iter().any(|f| f.ends_with("Hollandaise.cook")));
         assert!(files.iter().any(|f| f.ends_with("Hollandaise.jpg")));
+    }
+
+    #[test]
+    fn test_list_menus_between() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path().to_str().unwrap();
+        let path = format!("{dir}/week.menu");
+        fs::write(&path, "= Mon (2026-06-24)\n= Tue (2026-06-25)\n").unwrap();
+        fs::write(format!("{dir}/later.menu"), "= 2026-07-01\n").unwrap();
+
+        let matches = list_menus_between(
+            vec![dir.to_string()],
+            "2026-06-25".into(),
+            "2026-06-26".into(),
+        )
+        .unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, path);
+        assert_eq!(matches[0].menu.name, "week");
+        assert_eq!(matches[0].menu.first_date.as_deref(), Some("2026-06-24"));
+        assert_eq!(matches[0].menu.last_date.as_deref(), Some("2026-06-25"));
     }
 
     #[test]

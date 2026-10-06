@@ -1167,7 +1167,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].path, path);
+        assert_eq!(Utf8Path::new(&matches[0].path), Utf8Path::new(&path));
         assert_eq!(matches[0].menu.name, "week");
         assert_eq!(matches[0].menu.first_date.as_deref(), Some("2026-06-24"));
         assert_eq!(matches[0].menu.last_date.as_deref(), Some("2026-06-25"));

@@ -63,7 +63,9 @@ pub mod tree;
 mod walk;
 
 pub use fetcher::{get_recipe, get_recipe_str};
-pub use menu::{list_menus_for_date, Menu, MenuItem, MenuMeal, MenuSection};
+pub use menu::{
+    list_menus_between, list_menus_for_date, Menu, MenuItem, MenuMatch, MenuMeal, MenuSection,
+};
 pub use model::*;
 pub use search::{
     filter_by_metadata, search, search_with_filter, Condition, MetadataFilter, OneOrMany,

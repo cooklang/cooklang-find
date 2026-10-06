@@ -11,6 +11,7 @@
 
 use super::TreeError;
 use crate::model::RecipeEntry;
+use crate::walk::is_recipe_file;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::fs;
 
@@ -150,10 +151,6 @@ fn visible_children(dir: &Utf8Path) -> Result<Vec<Utf8PathBuf>, TreeError> {
         }
     }
     Ok(paths)
-}
-
-fn is_recipe_file(path: &Utf8Path) -> bool {
-    matches!(path.extension(), Some("cook" | "menu"))
 }
 
 #[cfg(test)]
@@ -367,5 +364,20 @@ mod tests {
             count_recipes(&file),
             Err(TreeError::NotADirectory(_))
         ));
+    }
+
+    #[test]
+    fn lists_and_counts_non_lowercase_extensions() {
+        // https://github.com/cooklang/cooklang-find/issues/11
+        let (_tmp, root) = temp_dir();
+        create_recipe(&root, "pie.COOK", "Bake pie");
+        create_recipe(&root, "week.Menu", "= Day 1");
+        create_recipe(&root.join("dessert"), "cake.Cook", "Bake cake");
+
+        let listing = list_dir(&root).unwrap();
+
+        assert_eq!(recipe_names(&listing), vec!["pie", "week"]);
+        assert_eq!(folder(&listing, "dessert").1, 1);
+        assert_eq!(count_recipes(&root).unwrap(), 3);
     }
 }

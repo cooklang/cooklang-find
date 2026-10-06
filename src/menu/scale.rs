@@ -73,13 +73,14 @@ struct RecipeSize {
 
 impl RecipeSize {
     /// Loads `<path>.cook`, then `<path>.menu`, from each base dir in turn;
-    /// a path already ending in `.menu` (`@./Weekly.menu{}`) is loaded as-is.
+    /// a path already ending in `.menu` in any case (`@./Weekly.menu{}`) is
+    /// loaded as-is.
     ///
     /// The extension is appended explicitly (rather than letting
     /// `get_recipe` guess) so a dotted name like `Mr. Smith's Stew` is not
     /// mistaken for one with an extension.
     fn load<P: AsRef<Utf8Path>>(base_dirs: &[P], path: &str) -> Self {
-        let candidates = if path.ends_with(".menu") {
+        let candidates = if crate::walk::has_extension(Utf8Path::new(path), "menu") {
             vec![path.to_string()]
         } else {
             vec![format!("{path}.cook"), format!("{path}.menu")]
@@ -537,5 +538,16 @@ mod tests {
         let (_t, dir) = recipes_dir();
         fs::write(dir.join("Inf.cook"), "---\nyield: inf%ml\n---\n@x{}\n").unwrap();
         assert_eq!(resolve("@./Inf{1000%ml}", &dir, 1.0), vec![Some(1000.0)]);
+    }
+
+    #[test]
+    fn explicit_menu_reference_ignores_extension_case() {
+        let (_t, dir) = recipes_dir();
+        fs::write(dir.join("Weekly.MENU"), "---\nservings: 2\n---\n").unwrap();
+
+        assert_eq!(
+            resolve("@./Weekly.MENU{4%servings}", &dir, 1.0),
+            vec![Some(2.0)]
+        );
     }
 }

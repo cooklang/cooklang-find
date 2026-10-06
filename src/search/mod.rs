@@ -780,4 +780,16 @@ mod tests {
         let paths = walk_recipe_paths(&temp_dir_path).unwrap();
         assert_eq!(paths, vec![temp_dir_path.join("pancakes.cook")]);
     }
+
+    #[test]
+    fn finds_recipes_with_non_lowercase_extensions() {
+        // https://github.com/cooklang/cooklang-find/issues/11
+        let temp_dir = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        fs::write(dir.join("Pancakes.COOK"), "Mix @flour{}").unwrap();
+
+        let results = search(&dir, "pancakes").unwrap();
+
+        assert_eq!(results.len(), 1);
+    }
 }

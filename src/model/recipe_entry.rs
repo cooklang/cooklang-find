@@ -360,11 +360,11 @@ impl RecipeEntry {
 
     /// Checks if this entry represents a menu file.
     ///
-    /// Returns `true` if the file has a .menu extension,
-    /// `false` otherwise (including content-based recipes).
+    /// Returns `true` if the file has a .menu extension (in any case, e.g.
+    /// `.MENU`), `false` otherwise (including content-based recipes).
     pub fn is_menu(&self) -> bool {
         *self.is_menu.get_or_init(|| match &self.source {
-            RecipeSource::Path { path } => path.extension() == Some("menu"),
+            RecipeSource::Path { path } => crate::walk::has_extension(path, "menu"),
             RecipeSource::Content { .. } => false,
         })
     }
@@ -1619,5 +1619,15 @@ mod tests {
         fs::write(&path, "---\ntitle: Changed\n---\n").unwrap();
 
         assert_eq!(entry.clone().metadata().title(), Some("Stew"));
+    }
+
+    #[test]
+    fn is_menu_ignores_extension_case() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let path = dir.join("week.MENU");
+        std::fs::write(&path, "= Day 1").unwrap();
+
+        assert!(RecipeEntry::from_path(path).unwrap().is_menu());
     }
 }

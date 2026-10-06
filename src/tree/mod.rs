@@ -433,4 +433,23 @@ mod tests {
         let names: Vec<_> = tree.children.keys().cloned().collect();
         assert_eq!(names, vec!["pancakes".to_string()]);
     }
+
+    #[test]
+    fn test_finds_recipes_with_non_lowercase_extensions() {
+        // https://github.com/cooklang/cooklang-find/issues/11
+        let temp_dir = TempDir::new().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        fs::create_dir_all(root.join("U/Sub/Deep")).unwrap();
+        fs::write(root.join("U/Sub/Deep/x.COOK"), "Mix.").unwrap();
+        fs::write(root.join("Week.Menu"), "= Day 1").unwrap();
+        fs::write(root.join("pie.Cook"), "Bake.").unwrap();
+
+        let tree = build_tree(&root).unwrap();
+
+        let mut names: Vec<_> = tree.children.keys().cloned().collect();
+        names.sort();
+        assert_eq!(names, vec!["U", "Week", "pie"]);
+        assert!(tree.children["Week"].recipe.as_ref().unwrap().is_menu());
+        assert_eq!(tree.recipe_count(), 3);
+    }
 }

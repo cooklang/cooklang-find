@@ -301,4 +301,16 @@ mod tests {
         assert_eq!(menu.dates(), vec!["2026-06-24"]);
         assert!(not_menu.is_none());
     }
+
+    #[test]
+    fn finds_menus_with_non_lowercase_extension() {
+        // https://github.com/cooklang/cooklang-find/issues/11
+        let (_t, dir) = temp_dir();
+        write_file(&dir, "week.MENU", "= 2026-06-24\n\n@a{}\n");
+
+        let results = list_menus_for_date(&[&dir], "2026-06-24").unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_menu());
+    }
 }

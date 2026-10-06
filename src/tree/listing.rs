@@ -3,9 +3,11 @@
 //! [`build_tree`](super::build_tree) opens and parses every recipe in a
 //! subtree, which is too slow for a UI that only shows one folder at a time
 //! (and, on iCloud, can trigger downloads of files nobody is looking at).
-//! [`list_dir`] reads only the folder being shown: recipes directly inside it
-//! are loaded, subfolders are only counted, by file name, never by content.
-//! <https://github.com/cooklang/cooklang-find/issues/17>
+//! [`list_dir`] reads only the folder being shown, and opens no file: recipes
+//! directly inside it read their frontmatter on first access, subfolders are
+//! only counted, by file name.
+//! <https://github.com/cooklang/cooklang-find/issues/17>,
+//! <https://github.com/cooklang/cooklang-find/issues/26>
 
 use super::TreeError;
 use crate::model::RecipeEntry;
@@ -24,8 +26,9 @@ pub struct DirListing {
 /// One child of a [`DirListing`].
 #[derive(Debug)]
 pub enum DirEntry {
-    /// A `.cook`/`.menu` file directly in the listed directory. Its metadata
-    /// is parsed; these are the only files [`list_dir`] opens.
+    /// A `.cook`/`.menu` file directly in the listed directory, built with
+    /// [`RecipeEntry::from_path_lazy`]: its frontmatter is read on first
+    /// access, not by [`list_dir`].
     Recipe(RecipeEntry),
     /// A subdirectory. It is counted, never parsed.
     Folder {
@@ -40,12 +43,15 @@ pub enum DirEntry {
 
 /// Lists the recipes and subfolders directly inside `dir`.
 ///
-/// Only `.cook`/`.menu` files at this level are opened (via
-/// [`RecipeEntry::from_path`]); a file whose content can't be read is left
-/// out, as in [`build_tree`](super::build_tree). Each subfolder gets a
-/// recursive [`count_recipes`], which looks at file names only. Folders
-/// without any recipe are listed too, with a count of `0`, so a folder picker
-/// can offer them.
+/// No file is opened. Recipes at this level are listed by name as
+/// [`RecipeEntry::from_path_lazy`] entries: their frontmatter is read the first
+/// time a caller asks for it (`metadata()`, `name()`, `title_image()`,
+/// `tags()`), so only the rows that are shown cost a file read. A recipe whose
+/// content can't be read is still listed, so the recipe entries at a level
+/// always match that level's by-name count. Each subfolder gets a recursive
+/// [`count_recipes`], which looks at file names only. Folders without any
+/// recipe are listed too, with a count of `0`, so a folder picker can offer
+/// them.
 ///
 /// Hidden files and directories (name starting with `.`) are skipped, as
 /// they are by `build_tree`.
@@ -82,9 +88,7 @@ pub fn list_dir<P: AsRef<Utf8Path>>(dir: P) -> Result<DirListing, TreeError> {
                 path,
             });
         } else if is_recipe_file(&path) {
-            if let Ok(recipe) = RecipeEntry::from_path(path) {
-                entries.push(DirEntry::Recipe(recipe));
-            }
+            entries.push(DirEntry::Recipe(RecipeEntry::from_path_lazy(path)));
         }
     }
 
@@ -328,9 +332,25 @@ mod tests {
 
         // Neither file is opened to be counted.
         assert_eq!(folder(&list_dir(&root).unwrap(), "dessert").1, 2);
-        // At the listed level, an unreadable recipe can't be loaded, so it is
-        // left out of the entries, as build_tree does.
-        assert_eq!(recipe_names(&list_dir(&dessert).unwrap()), vec!["cake"]);
+        // At the listed level, the unreadable recipe is listed too (falling
+        // back to its file stem), so rows match the parent's count.
+        assert_eq!(
+            recipe_names(&list_dir(&dessert).unwrap()),
+            vec!["cake", "pie"]
+        );
+    }
+
+    #[test]
+    fn recipe_entries_are_read_on_first_access() {
+        let (_tmp, root) = temp_dir();
+        let path = create_recipe(&root, "pancakes.cook", "---\ntitle: Listed\n---\n");
+
+        let listing = list_dir(&root).unwrap();
+        // Changed after listing: an entry that read the file while listing
+        // would still say "Listed".
+        fs::write(&path, "---\ntitle: Read later\n---\n").unwrap();
+
+        assert_eq!(recipe_names(&listing), vec!["Read later"]);
     }
 
     #[test]

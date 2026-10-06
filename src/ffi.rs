@@ -762,8 +762,11 @@ pub fn build_tree(base_dir: String) -> Result<Arc<FfiRecipeTree>, CooklangError>
 
 /// Lists the recipes and subfolders directly inside a directory.
 ///
-/// Only recipes at this level are opened; subfolders are counted by file
-/// name, never read. Use this instead of `build_tree` to show one folder.
+/// No file is opened: recipes at this level are listed by name, and each
+/// one reads its frontmatter the first time `name()`, `metadata()`,
+/// `titleImage()` or `tags()` is called on it. `path()`, `fileName()` and
+/// `isMenu()` never touch the file. Subfolders are counted by file name.
+/// Use this instead of `build_tree` to show one folder.
 ///
 /// # Arguments
 /// * `dir` - Directory to list
@@ -987,6 +990,25 @@ mod tests {
         assert!(!household.has_recipe);
         assert_eq!(household.recipe_count, 2);
         assert_eq!(tree.root().recipe_count, 2);
+    }
+
+    #[test]
+    fn test_list_dir_reads_recipes_on_first_access() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+        let path = create_test_recipe(temp_path, "pancakes", "---\ntitle: Listed\n---\n");
+
+        let listing = list_dir(temp_path.to_string()).unwrap();
+        // Changed after listing: the entry hasn't read the file yet.
+        fs::write(&path, "---\ntitle: Read later\n---\n").unwrap();
+
+        let FfiDirEntry::Recipe { recipe } = &listing.entries[0] else {
+            panic!("expected the pancakes recipe");
+        };
+        assert_eq!(recipe.file_name(), Some("pancakes.cook".to_string()));
+        assert!(!recipe.is_menu());
+        assert_eq!(recipe.name(), Some("Read later".to_string()));
+        assert_eq!(recipe.metadata().title, Some("Read later".to_string()));
     }
 
     #[test]

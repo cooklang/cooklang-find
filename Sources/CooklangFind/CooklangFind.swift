@@ -1327,6 +1327,75 @@ public func FfiConverterTypeFfiMenu_lower(_ value: FfiMenu) -> RustBuffer {
 
 
 /**
+ * A menu file found by `list_menus_between`, with its parsed content.
+ */
+public struct FfiMenuMatch: Equatable, Hashable {
+    /**
+     * Path of the `.menu` file
+     */
+    public let path: String
+    /**
+     * Parsed menu; scales are not resolved
+     */
+    public let menu: FfiMenu
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Path of the `.menu` file
+         */path: String, 
+        /**
+         * Parsed menu; scales are not resolved
+         */menu: FfiMenu) {
+        self.path = path
+        self.menu = menu
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiMenuMatch: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiMenuMatch: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMenuMatch {
+        return
+            try FfiMenuMatch(
+                path: FfiConverterString.read(from: &buf), 
+                menu: FfiConverterTypeFfiMenu.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiMenuMatch, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.path, into: &buf)
+        FfiConverterTypeFfiMenu.write(value.menu, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMenuMatch_lift(_ buf: RustBuffer) throws -> FfiMenuMatch {
+    return try FfiConverterTypeFfiMenuMatch.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMenuMatch_lower(_ value: FfiMenuMatch) -> RustBuffer {
+    return FfiConverterTypeFfiMenuMatch.lower(value)
+}
+
+
+/**
  * A meal within a menu section.
  */
 public struct FfiMenuMeal: Equatable, Hashable {
@@ -2431,6 +2500,31 @@ fileprivate struct FfiConverterSequenceTypeFfiRecipeEntry: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiMenuMatch: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiMenuMatch]
+
+    public static func write(_ value: [FfiMenuMatch], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiMenuMatch.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiMenuMatch] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiMenuMatch]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiMenuMatch.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiMenuMeal: FfiConverterRustBuffer {
     typealias SwiftType = [FfiMenuMeal]
 
@@ -2650,8 +2744,11 @@ public func libraryVersion() -> String  {
 /**
  * Lists the recipes and subfolders directly inside a directory.
  *
- * Only recipes at this level are opened; subfolders are counted by file
- * name, never read. Use this instead of `build_tree` to show one folder.
+ * No file is opened: recipes at this level are listed by name, and each
+ * one reads its frontmatter the first time `name()`, `metadata()`,
+ * `titleImage()` or `tags()` is called on it. `path()`, `fileName()` and
+ * `isMenu()` never touch the file. Subfolders are counted by file name.
+ * Use this instead of `build_tree` to show one folder.
  *
  * # Arguments
  * * `dir` - Directory to list
@@ -2664,6 +2761,32 @@ public func listDir(dir: String)throws  -> FfiDirListing  {
         uniffiCallStatus in
     uniffi_cooklang_find_fn_func_list_dir(
         FfiConverterString.lower(dir),uniffiCallStatus
+    )
+})
+}
+/**
+ * Lists menu files with a section dated between `from` and `to`
+ * (inclusive), each with its parsed menu, in one walk.
+ *
+ * A section's date is the first `YYYY-MM-DD` in its header; dates compare
+ * as strings. Each file is read once and no referenced recipe is opened
+ * (scales are not resolved). Pass the same date twice for a single day.
+ *
+ * # Arguments
+ * * `base_dirs` - Root directories to scan
+ * * `from` - First date of the range (e.g. "2026-06-24")
+ * * `to` - Last date of the range (e.g. "2026-06-25")
+ *
+ * # Returns
+ * The matching menus with their paths.
+ */
+public func listMenusBetween(baseDirs: [String], from: String, to: String)throws  -> [FfiMenuMatch]  {
+    return try  FfiConverterSequenceTypeFfiMenuMatch.lift(try rustCallWithError(FfiConverterTypeCooklangError_lift) {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_list_menus_between(
+        FfiConverterSequenceString.lower(baseDirs),
+        FfiConverterString.lower(from),
+        FfiConverterString.lower(to),uniffiCallStatus
     )
 })
 }
@@ -2857,7 +2980,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_cooklang_find_checksum_func_library_version() != 3771) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_cooklang_find_checksum_func_list_dir() != 4850) {
+    if (uniffi_cooklang_find_checksum_func_list_dir() != 51528) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_cooklang_find_checksum_func_list_menus_between() != 19402) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_cooklang_find_checksum_func_list_menus_for_date() != 56278) {

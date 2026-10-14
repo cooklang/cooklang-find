@@ -56,7 +56,7 @@ Out:
 ### 1. `companion_files(recipe_path) -> Vec<Utf8PathBuf>`
 
 The title image and every step and section image next to the recipe, as
-absolute paths in this order: title image first, then linear step images by
+paths in the recipe's folder, in the same form as the recipe path, in this order: title image first, then linear step images by
 step, then sectioned images by section then step. Never a referenced recipe.
 
 Rules:

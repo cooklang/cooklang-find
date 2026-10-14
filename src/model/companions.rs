@@ -5,7 +5,7 @@
 //! - `Name.N.ext` — step N of a recipe without sections
 //! - `Name.S.N.ext` — section S, step N
 //!
-//! `N` and `S` are one-based. `ext` is one of [`IMAGE_EXTENSIONS`], in any
+//! `N` and `S` are one-based plain decimals, no leading zero. `ext` is one of [`IMAGE_EXTENSIONS`], in any
 //! ASCII case. `Name` is the recipe file's stem, so `Dr.Cook.cook` owns
 //! `Dr.Cook.jpg`. Referenced recipes are never companions.
 
@@ -27,13 +27,18 @@ pub(crate) enum Slot {
 
 /// Lists the recipe's folder once and returns every companion with its
 /// slot, sorted by slot, then by extension preference, then by file name.
-/// Files whose names start with `.` are skipped. A folder that cannot be
-/// read, or a path without a parent or stem, gives an empty list.
+/// Files whose names start with `.` are skipped. A path without a stem, or
+/// whose folder cannot be read, gives an empty list.
 pub(crate) fn scan(recipe_path: &Utf8Path) -> Vec<(Slot, Utf8PathBuf)> {
     let (Some(dir), Some(stem)) = (recipe_path.parent(), recipe_path.file_stem()) else {
         return Vec::new();
     };
-    let Ok(entries) = fs::read_dir(dir) else {
+    let listed = if dir.as_str().is_empty() {
+        Utf8Path::new(".")
+    } else {
+        dir
+    };
+    let Ok(entries) = fs::read_dir(listed) else {
         return Vec::new();
     };
     let mut found: Vec<(Slot, usize, Utf8PathBuf)> = entries
@@ -69,10 +74,7 @@ fn classify(file_name: &str, stem: &str) -> Option<(Slot, usize)> {
     let slot = match numbers {
         None => Slot::Title,
         Some(numbers) => {
-            let numbers: Vec<usize> = numbers
-                .split('.')
-                .map(|n| n.parse::<usize>().ok().filter(|&n| n >= 1))
-                .collect::<Option<_>>()?;
+            let numbers: Vec<usize> = numbers.split('.').map(step_number).collect::<Option<_>>()?;
             match numbers[..] {
                 [step] => Slot::Linear(step),
                 [section, step] => Slot::Sectioned(section, step),
@@ -83,11 +85,19 @@ fn classify(file_name: &str, stem: &str) -> Option<(Slot, usize)> {
     Some((slot, rank))
 }
 
+/// A one-based step or section number: ASCII digits only, no leading zero.
+fn step_number(text: &str) -> Option<usize> {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) || text.starts_with('0') {
+        return None;
+    }
+    text.parse().ok()
+}
+
 /// The title image and every step and section image next to `recipe_path`,
-/// as absolute paths: title first, then linear steps by step, then sectioned
+/// as paths in the recipe's folder, in the same form as `recipe_path`: title first, then linear steps by step, then sectioned
 /// images by section and step. Several files for one slot (`Name.jpg` and
-/// `Name.PNG`) are all returned, in [`IMAGE_EXTENSIONS`] order. Never a
-/// referenced recipe. Opens no file; see [`scan`] for what yields an empty
+/// `Name.PNG`) are all returned, in [`IMAGE_EXTENSIONS`] order. A recipe this one references (`@./Other{}`) is not a companion; see
+/// [`resolve_reference`](crate::resolve_reference). Opens no file; see [`scan`] for what yields an empty
 /// list.
 pub fn companion_files(recipe_path: &Utf8Path) -> Vec<Utf8PathBuf> {
     scan(recipe_path)
@@ -141,6 +151,8 @@ mod tests {
         assert_eq!(classify("Pasta Salad.jpg", "Pasta"), None);
         assert_eq!(classify("Pasta.Salad.jpg", "Pasta"), None);
         assert_eq!(classify("pasta.jpg", "Pasta"), None);
+        assert_eq!(classify("Pasta.01.jpg", "Pasta"), None);
+        assert_eq!(classify("Pasta.+1.jpg", "Pasta"), None);
     }
 
     #[test]
@@ -157,6 +169,17 @@ mod tests {
         touch(&dir, ".Pasta.jpg");
         touch(&dir, "Pasta.gif");
 
+        assert_eq!(
+            scan(&recipe).iter().map(|(s, _)| *s).collect::<Vec<_>>(),
+            vec![
+                Slot::Title,
+                Slot::Title,
+                Slot::Linear(1),
+                Slot::Linear(2),
+                Slot::Sectioned(1, 2),
+                Slot::Sectioned(2, 1),
+            ]
+        );
         assert_eq!(
             names(&companion_files(&recipe)),
             vec![
@@ -197,5 +220,21 @@ mod tests {
         let recipe = touch(&dir, "Pasta.cook");
         fs::create_dir(dir.join("Pasta.jpg")).unwrap();
         assert!(companion_files(&recipe).is_empty());
+    }
+
+    static CWD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn bare_file_name_lists_the_current_directory() {
+        let _guard = CWD.lock().unwrap_or_else(|e| e.into_inner());
+        let (_t, dir) = root();
+        touch(&dir, "Pasta.cook");
+        touch(&dir, "Pasta.jpg");
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let found = companion_files(Utf8Path::new("Pasta.cook"));
+        std::env::set_current_dir(previous).unwrap();
+        assert_eq!(names(&found), vec!["Pasta.jpg"]);
+        assert_eq!(found[0], Utf8Path::new("Pasta.jpg"));
     }
 }

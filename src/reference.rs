@@ -9,8 +9,11 @@
 
 use crate::walk::has_extension;
 use camino::{Utf8Path, Utf8PathBuf};
+use regex::Regex;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fs;
+use std::sync::OnceLock;
 
 /// The component after an `@`.
 #[derive(Debug, PartialEq, Eq)]
@@ -96,15 +99,45 @@ pub(crate) fn is_reference(name: &str) -> bool {
     name.starts_with("./") || name.starts_with("../")
 }
 
+/// Removes `[- ... -]` block comments, which may span lines.
+pub(crate) fn strip_block_comments(body: &str) -> Cow<'_, str> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?s)\[-.*?-\]").unwrap())
+        .replace_all(body, "")
+}
+
+/// The content after an optional BOM and an optional leading `---` YAML
+/// frontmatter block: the text after the closing `---` line, or an empty
+/// string when the block is never closed. Content without frontmatter is
+/// returned unchanged.
+fn skip_frontmatter(content: &str) -> &str {
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let is_fence = |line: &str| line.trim_end_matches(['\r', '\n']) == "---";
+    let mut lines = content.split_inclusive('\n');
+    let Some(first) = lines.next().filter(|first| is_fence(first)) else {
+        return content;
+    };
+    let mut offset = first.len();
+    for line in lines {
+        offset += line.len();
+        if is_fence(line) {
+            return &content[offset..];
+        }
+    }
+    ""
+}
+
 /// The recipe references in `content`, in order of first appearance,
 /// deduplicated, as written (`./sauces/Hollandaise`, `../Pesto`).
 ///
-/// Scans line by line with [`component`], so a name never spans lines, and
-/// stops a line at `--` (a comment).
+/// Scans line by line with [`component`], so a name never spans lines.
+/// Frontmatter and `[- ... -]` block comments are skipped, and a line stops
+/// at `--` (a comment).
 pub(crate) fn extract_references(content: &str) -> Vec<String> {
+    let body = strip_block_comments(skip_frontmatter(content));
     let mut seen = HashSet::new();
     let mut refs = Vec::new();
-    for line in content.lines() {
+    for line in body.lines() {
         let mut i = 0;
         while i < line.len() {
             let rest = &line[i..];
@@ -316,6 +349,27 @@ mod tests {
         assert_eq!(
             extract_references("@./Pesto{} -- was @./Old{}\n@-- not a modifier"),
             vec!["./Pesto"]
+        );
+    }
+
+    #[test]
+    fn frontmatter_and_block_comments_are_not_scanned() {
+        assert_eq!(
+            extract_references("---\ntitle: @./X\n---\n@./Y{}"),
+            vec!["./Y"]
+        );
+        assert_eq!(
+            extract_references("[- @./Hidden{} -] @./Shown"),
+            vec!["./Shown"]
+        );
+        assert_eq!(
+            extract_references("@./A{}\n[- many\nlines @./B{}\n-] @./C{}"),
+            vec!["./A", "./C"]
+        );
+        assert_eq!(extract_references("\u{feff}---\n---\n@./Z{}"), vec!["./Z"]);
+        assert_eq!(
+            extract_references("---\nno closing @./X{}"),
+            Vec::<String>::new()
         );
     }
 

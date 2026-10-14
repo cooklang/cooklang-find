@@ -265,13 +265,12 @@ impl FfiRecipeEntry {
             .map(|v| serde_json::to_string(v).unwrap_or_default())
     }
 
-    /// Returns all file paths related to this recipe.
-    ///
-    /// Includes images, referenced recipe files, and recursively
-    /// related files of referenced recipes.
-    pub fn related_files(&self) -> Vec<String> {
+    /// Returns every file this recipe depends on: its companion images, the
+    /// recipes and menus it references (resolved against `base_dir`, the
+    /// collection root), and recursively theirs.
+    pub fn related_files(&self, base_dir: String) -> Vec<String> {
         self.inner
-            .related_files()
+            .related_files(Utf8Path::new(&base_dir))
             .into_iter()
             .map(|p| p.to_string())
             .collect()
@@ -1127,7 +1126,7 @@ mod tests {
         );
 
         let recipe = recipe_from_path(path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(temp_path.to_string());
 
         assert_eq!(files.len(), 2);
         assert!(files.iter().any(|f| f.ends_with("Hollandaise.cook")));

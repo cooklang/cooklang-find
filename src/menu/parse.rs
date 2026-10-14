@@ -2,7 +2,7 @@
 
 use super::model::{Menu, MenuItem, MenuMeal, MenuSection};
 use crate::model::{parse_yaml_content, Metadata};
-use crate::reference::{component, is_reference, Component};
+use crate::reference::{component, is_reference, strip_block_comments, Component};
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -61,12 +61,6 @@ fn split_frontmatter(content: &str) -> (Metadata, &str) {
         offset += line.len();
     }
     (Metadata::default(), content)
-}
-
-fn strip_block_comments(body: &str) -> std::borrow::Cow<'_, str> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?s)\[-.*?-\]").unwrap())
-        .replace_all(body, "")
 }
 
 /// Returns the name of a `= Name` / `== Name ==` section header, with the

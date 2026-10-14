@@ -2,6 +2,7 @@ use super::companions::{scan, Slot};
 use super::lossy::{lines_lossy, read_to_string_lossy};
 use super::metadata::{extract_and_parse_metadata, Metadata};
 use crate::menu::Menu;
+use crate::reference::{extract_references, resolve_reference};
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -486,25 +487,21 @@ impl RecipeEntry {
             .collect()
     }
 
-    /// Returns all file paths related to this recipe.
+    /// Every file this recipe depends on: its companion files (title and
+    /// step images, every extension variant), the recipes and menus it
+    /// references, and, recursively, theirs.
     ///
-    /// Includes:
-    /// - Title image (if any)
-    /// - Step/section images
-    /// - Referenced recipe .cook files (detected via `@./path` or `@../path` syntax)
-    /// - Recursively: related files of referenced recipes
-    ///
-    /// Returns an empty Vec for content-based recipes.
-    /// Missing referenced files are silently skipped.
-    /// Cycles are detected and broken automatically.
-    pub fn related_files(&self) -> Vec<Utf8PathBuf> {
-        let path = match &self.source {
-            RecipeSource::Path { path } => path,
-            RecipeSource::Content { .. } => return Vec::new(),
+    /// References resolve against `base_dir`, the collection root, with
+    /// [`resolve_reference`](crate::resolve_reference). References inside
+    /// frontmatter or comments are ignored. Missing references are skipped;
+    /// cycles are broken. Empty for content-based entries.
+    pub fn related_files(&self, base_dir: &Utf8Path) -> Vec<Utf8PathBuf> {
+        let RecipeSource::Path { path } = &self.source else {
+            return Vec::new();
         };
         let mut visited = HashSet::new();
         let mut result = Vec::new();
-        collect_related_files(path, &mut visited, &mut result);
+        collect_related_files(base_dir, path, &mut visited, &mut result);
         result
     }
 }
@@ -533,70 +530,42 @@ fn read_metadata(path: &Utf8Path) -> Result<Metadata, RecipeEntryError> {
     )
 }
 
-/// Extracts recipe references from Cooklang content.
-///
-/// Looks for ingredient references that are relative file paths,
-/// matching patterns like `@./path/to/Recipe` or `@../path/to/Recipe`
-/// with optional quantity `{...}`.
-///
-/// Returns deduplicated list of referenced paths (without extension).
-fn extract_recipe_references(content: &str) -> Vec<String> {
-    crate::reference::extract_references(content)
+/// Canonical form for the visited set, or the path itself when it cannot
+/// be canonicalised.
+fn canonical(path: &Utf8Path) -> Utf8PathBuf {
+    match std::fs::canonicalize(path) {
+        Ok(p) => Utf8PathBuf::from_path_buf(p)
+            .unwrap_or_else(|p| Utf8PathBuf::from(p.to_string_lossy().into_owned())),
+        Err(_) => path.to_path_buf(),
+    }
 }
 
-/// Recursively collects all files related to a recipe.
-///
-/// Adds image paths and referenced recipe paths to `result`.
-/// Uses `visited` to prevent cycles and deduplication.
+/// Recursively collects the files related to `recipe_path`: companions,
+/// then each resolved reference and its own related files.
 fn collect_related_files(
+    base_dir: &Utf8Path,
     recipe_path: &Utf8Path,
     visited: &mut HashSet<Utf8PathBuf>,
     result: &mut Vec<Utf8PathBuf>,
 ) {
-    // Canonicalize and mark as visited to prevent cycles
-    let canonical = match std::fs::canonicalize(recipe_path) {
-        Ok(p) => Utf8PathBuf::from_path_buf(p)
-            .unwrap_or_else(|p| Utf8PathBuf::from(p.to_string_lossy().into_owned())),
-        Err(_) => recipe_path.to_path_buf(),
-    };
-    if !visited.insert(canonical) {
+    if !visited.insert(canonical(recipe_path)) {
         return;
     }
-
-    // Collect title and step images
     result.extend(scan(recipe_path).into_iter().map(|(_, path)| path));
 
-    // Read content and extract recipe references. Decoded lossily, so a recipe
-    // with a stray non-UTF-8 byte still has its references followed.
-    let content = match File::open(recipe_path)
-        .and_then(|file| read_to_string_lossy(&mut BufReader::new(file)))
-    {
-        Ok(c) => c,
-        Err(_) => return,
+    // Decoded lossily, so a stray non-UTF-8 byte does not hide references.
+    let Ok(content) =
+        File::open(recipe_path).and_then(|file| read_to_string_lossy(&mut BufReader::new(file)))
+    else {
+        return;
     };
-
-    let dir = recipe_path.parent().unwrap_or(recipe_path);
-    for ref_path_str in extract_recipe_references(&content) {
-        // Resolve relative to recipe's directory
-        let ref_path = dir.join(&ref_path_str);
-
-        // Try with .cook extension if no extension present
-        let candidates = if ref_path.extension().is_some() {
-            vec![ref_path]
-        } else {
-            vec![ref_path.with_extension("cook")]
+    for reference in extract_references(&content) {
+        let Some(file) = resolve_reference(base_dir, &reference) else {
+            continue;
         };
-
-        for candidate in candidates {
-            let canonical_candidate = match std::fs::canonicalize(&candidate) {
-                Ok(p) => Utf8PathBuf::from_path_buf(p)
-                    .unwrap_or_else(|p| Utf8PathBuf::from(p.to_string_lossy().into_owned())),
-                Err(_) => candidate.clone(),
-            };
-            if candidate.exists() && !visited.contains(&canonical_candidate) {
-                result.push(candidate.clone());
-                collect_related_files(&candidate, visited, result);
-            }
+        if !visited.contains(&canonical(&file)) {
+            result.push(file.clone());
+            collect_related_files(base_dir, &file, visited, result);
         }
     }
 }
@@ -811,9 +780,9 @@ mod tests {
         let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", "Test content");
 
         // Test each supported extension
-        for ext in ["jpg", "jpeg", "png", "webp"] {
+        for ext in ["jpg", "jpeg", "png", "webp", "heic"] {
             // Clean up any previous test images
-            for old_ext in ["jpg", "jpeg", "png", "webp"] {
+            for old_ext in ["jpg", "jpeg", "png", "webp", "heic"] {
                 let _ = std::fs::remove_file(recipe_path.with_extension(old_ext));
             }
 
@@ -1021,11 +990,11 @@ mod tests {
         assert!(!images.is_empty());
         assert_eq!(images.count(), 3);
 
-        // Verify images are stored at correct indices (one-indexed access, zero-indexed storage)
-        assert!(images.get(0, 1).is_some()); // Recipe.1.jpg at [0][0]
+        // `get(0, n)` is the linear step image `Recipe.n.jpg`.
+        assert!(images.get(0, 1).is_some()); // Recipe.1.jpg
         assert!(images.get(0, 2).is_none()); // No Recipe.2.jpg
-        assert!(images.get(0, 3).is_some()); // Recipe.3.jpg at [0][2]
-        assert!(images.get(0, 5).is_some()); // Recipe.5.jpg at [0][4]
+        assert!(images.get(0, 3).is_some()); // Recipe.3.jpg
+        assert!(images.get(0, 5).is_some()); // Recipe.5.jpg
 
         // Verify actual paths
         let img1 = images.get(0, 1).unwrap();
@@ -1048,12 +1017,12 @@ mod tests {
         assert!(!images.is_empty());
         assert_eq!(images.count(), 2);
 
-        // Recipe.2.4.jpg should be at section 2, step 4 (stored at [1][3])
+        // `get(2, 4)` → `Recipe.2.4.jpg`
         assert!(images.get(2, 4).is_some());
         let img = images.get(2, 4).unwrap();
         assert!(img.contains("test_recipe.2.4.jpg"));
 
-        // Recipe.1.1.jpg should be at section 1, step 1 (stored at [0][0])
+        // `get(1, 1)` → `Recipe.1.1.jpg`
         assert!(images.get(1, 1).is_some());
         let img = images.get(1, 1).unwrap();
         assert!(img.contains("test_recipe.1.1.jpg"));
@@ -1079,10 +1048,10 @@ mod tests {
         let images = recipe.step_images();
         assert_eq!(images.count(), 2);
 
-        // Recipe.2.jpg is stored at [0][1] (section 0 = linear)
+        // `get(0, 2)` → `Recipe.2.jpg` (section 0 is the linear step list)
         assert!(images.get(0, 2).is_some());
 
-        // Recipe.2.4.jpg is stored at [1][3] (section 2, step 4)
+        // `get(2, 4)` → `Recipe.2.4.jpg`
         assert!(images.get(2, 4).is_some());
     }
 
@@ -1238,7 +1207,7 @@ mod tests {
         let recipe_path = create_test_recipe(&temp_dir_path, "simple", "Just a recipe");
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
         assert!(files.is_empty());
     }
 
@@ -1250,7 +1219,7 @@ mod tests {
         let image_path = create_test_image(&temp_dir_path, "pasta", "jpg");
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0], image_path);
     }
@@ -1264,14 +1233,14 @@ mod tests {
         create_test_image(&temp_dir_path, "pasta.2", "jpg");
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
         assert_eq!(files.len(), 2);
     }
 
     #[test]
     fn test_related_files_content_based_returns_empty() {
         let recipe = RecipeEntry::from_content("Just content".to_string(), None).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(Utf8Path::new("/nowhere"));
         assert!(files.is_empty());
     }
 
@@ -1296,7 +1265,7 @@ mod tests {
         );
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
 
         // Should include: sauces/Hollandaise.cook + sauces/Hollandaise.jpg
         assert_eq!(files.len(), 2);
@@ -1327,7 +1296,7 @@ mod tests {
         create_test_recipe(
             &sauces_dir,
             "Gravy",
-            "Add @../base/Stock{200%ml} and thicken.",
+            "Add @./base/Stock{200%ml} and thicken.",
         );
 
         // Main recipe -> references sauces/Gravy
@@ -1338,7 +1307,7 @@ mod tests {
         );
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
 
         // Should include:
         // - sauces/Gravy.cook (direct reference)
@@ -1365,7 +1334,7 @@ mod tests {
 
         let recipe_path = temp_dir_path.join("RecipeA.cook");
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
 
         // Should include RecipeB.cook but not loop infinitely
         assert_eq!(files.len(), 1);
@@ -1384,10 +1353,58 @@ mod tests {
         );
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
 
         // Missing references are silently skipped
         assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_related_files_resolve_from_base_dir_not_recipe_folder() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let sub = temp_dir_path.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        let root_b = create_test_recipe(&temp_dir_path, "B", "Root B");
+        create_test_recipe(&sub, "B", "Sub B");
+        let a = create_test_recipe(&sub, "A", "Use @./B{} here.");
+
+        let recipe = RecipeEntry::from_path(a).unwrap();
+        assert_eq!(recipe.related_files(&temp_dir_path), vec![root_b]);
+    }
+
+    #[test]
+    fn test_related_files_follows_menu_references_and_spaces() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let menu = temp_dir_path.join("Sunday.menu");
+        std::fs::write(&menu, "= Day\n- @./Pesto Sauce{}\n").unwrap();
+        let pesto = create_test_recipe(&temp_dir_path, "Pesto Sauce", "Blend");
+        let plan = create_test_recipe(
+            &temp_dir_path,
+            "Plan",
+            "See @./Sunday{} for @./Pesto Sauce{2}.",
+        );
+
+        let recipe = RecipeEntry::from_path(plan).unwrap();
+        assert_eq!(recipe.related_files(&temp_dir_path), vec![menu, pesto]);
+    }
+
+    #[test]
+    fn test_related_files_ignore_commented_out_references() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        create_test_recipe(&temp_dir_path, "Hidden", "x");
+        let shown = create_test_recipe(&temp_dir_path, "Shown", "y");
+        let plan = create_test_recipe(
+            &temp_dir_path,
+            "Plan",
+            "---\nsource: @./Hidden\n---\n[- @./Hidden{} -] @./Shown{} -- @./Hidden{}",
+        );
+
+        let recipe = RecipeEntry::from_path(plan).unwrap();
+        assert_eq!(recipe.related_files(&temp_dir_path), vec![shown]);
     }
 
     fn temp_dir() -> (TempDir, Utf8PathBuf) {

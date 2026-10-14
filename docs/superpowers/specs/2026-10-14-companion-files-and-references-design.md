@@ -119,7 +119,8 @@ Algorithm:
 
 1. Split on `/`; drop empty and `.` segments; `..` pops the previous segment.
    The result must not escape the root: if `..` would pop past the start,
-   return `None`.
+   return `None`. `\` also separates, and a leading `/` is ignored (read as
+   relative to the root).
 2. Join to `base_dir`.
 3. "Has an extension" means the last segment ends in `.cook` or `.menu`,
    compared case-insensitively like `walk::has_extension`. Any other dot is

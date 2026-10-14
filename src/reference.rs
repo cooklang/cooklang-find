@@ -138,7 +138,10 @@ pub(crate) fn extract_references(content: &str) -> Vec<String> {
 /// the extension is compared ignoring ASCII case, so `./Pesto` finds
 /// `Pesto.COOK` on any filesystem; the stem must match exactly. The first
 /// existing regular file wins, in its real spelling; `None` otherwise.
-/// Symlinks are not followed for the containment check.
+/// Symlinks are not followed for the containment check. `\` is treated as a
+/// separator too, so a Windows-style reference cannot smuggle `..` past the
+/// check; a name containing `\` is not addressable. A leading `/` is
+/// ignored, so an absolute path is read as relative to the root.
 ///
 /// This is the one rule for references, used by `RecipeEntry::related_files`
 /// and `Menu::resolve_scales`, and the same rule CookCLI applies.
@@ -157,6 +160,9 @@ pub fn resolve_reference(base_dir: &Utf8Path, reference: &str) -> Option<Utf8Pat
     let dir = segments
         .iter()
         .fold(base_dir.to_path_buf(), |dir, segment| dir.join(segment));
+    if !dir.starts_with(base_dir) {
+        return None;
+    }
 
     let mut wanted = Vec::with_capacity(3);
     let as_path = Utf8Path::new(name);
@@ -175,9 +181,9 @@ pub fn resolve_reference(base_dir: &Utf8Path, reference: &str) -> Option<Utf8Pat
     wanted.iter().find_map(|want| {
         names
             .iter()
-            .find(|have| same_file_name(have, want))
+            .filter(|have| same_file_name(have, want))
             .map(|have| dir.join(have))
-            .filter(|path| path.is_file())
+            .find(|path| path.is_file())
     })
 }
 
@@ -194,6 +200,7 @@ fn same_file_name(have: &str, want: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     fn name(body: &str) -> Option<&str> {
         component(body).map(|c| c.name)
@@ -313,10 +320,6 @@ mod tests {
         );
     }
 
-    use camino::{Utf8Path, Utf8PathBuf};
-    use std::fs;
-    use tempfile::TempDir;
-
     fn root() -> (TempDir, Utf8PathBuf) {
         let temp = TempDir::new().unwrap();
         let dir = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
@@ -393,5 +396,12 @@ mod tests {
         assert_eq!(resolve_reference(&dir, "./Nothing"), None);
         assert_eq!(resolve_reference(&dir, "./"), None);
         assert_eq!(resolve_reference(&dir, ""), None);
+    }
+
+    #[test]
+    fn drive_letter_segment_cannot_escape_the_root() {
+        let (_t, dir) = root();
+        assert_eq!(resolve_reference(&dir, "./C:/Users/x/secrets"), None);
+        assert_eq!(resolve_reference(&dir, "C:\\secrets"), None);
     }
 }

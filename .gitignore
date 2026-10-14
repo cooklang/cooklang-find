@@ -1,3 +1,5 @@
 /target
-.DS_Store/bindings
+.DS_Store
+/bindings
 *.xcframework.zip
+.worktrees/

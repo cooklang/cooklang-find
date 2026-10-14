@@ -125,7 +125,9 @@ Algorithm:
    compared case-insensitively like `walk::has_extension`. Any other dot is
    part of the name (`Dr.Cook`, `Mr. Smith's Stew`), which is what
    `menu/scale.rs` already does for `.menu`. With such a suffix, try the
-   path as written. Otherwise try `<path>.cook` then `<path>.menu`. This
+   path as written first. Then, for every reference, try `<path>.cook` and
+   `<path>.menu`: `Utf8Path::extension()` of `Dr.Cook` is `Cook`, so the
+   fallback is what makes `./Dr.Cook` find `Dr.Cook.cook`. This
    also fixes `menu/scale.rs`, which today turns `./Pesto.cook` into
    `Pesto.cook.cook`; the menu scaling tests gain that case.
 4. Return the first candidate that is an existing regular file, else `None`.

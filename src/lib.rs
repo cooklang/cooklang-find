@@ -68,6 +68,7 @@ pub use menu::{
     list_menus_between, list_menus_for_date, Menu, MenuItem, MenuMatch, MenuMeal, MenuSection,
 };
 pub use model::*;
+pub use reference::resolve_reference;
 pub use search::{
     filter_by_metadata, search, search_with_filter, Condition, MetadataFilter, OneOrMany,
 };

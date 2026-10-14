@@ -263,6 +263,12 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 
 ## API Reference
 
+### Upgrading from 0.10
+
+- `relatedFiles()` is now `relatedFiles(baseDir)`: references resolve against the collection root you pass, not the recipe's own folder, and a reference that leaves the root is not followed.
+- Step images: a sectioned image's `section` is now its real one-based section. `Name.1.2.jpg` reports `section: 1` (it used to collapse into section 0 and collide with `Name.2.jpg`). `getStepImage(0, n)` reads only `Name.n.ext`.
+- Image extensions match in any letter case, and `heic` is recognised.
+
 ### Functions
 
 | Function | Description |
@@ -279,7 +285,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | `listMenusBetween(baseDirs, from, to)` | Find `.menu` files with a section dated in `from`...`to` (inclusive, `YYYY-MM-DD`), in one walk; returns each path with its parsed menu (scales not resolved) |
 | `parseMenu(path, baseDirs, scale)` | Parse a `.menu` file into days, meals, and items, resolving recipe reference scales. References resolve with `resolveReference` against each of `baseDirs` in turn, not the menu's folder; `{=2}` is still multiplied by `scale`; missing recipes fall back silently to the raw quantity. Throws `MenuError` if `path` is not a `.menu` file, or if `scale` is not finite or is `<= 0` |
 | `parseMenuContent(content, name)` | Parse menu text without resolving scales |
-| `companionFiles(recipePath)` | The images that belong to a recipe (`Name.ext`, `Name.N.ext`, `Name.S.N.ext`; jpg/jpeg/png/webp/heic in any case), title first, then `Name.N.ext` by step, then `Name.S.N.ext` by section and step. Opens no file |
+| `companionFiles(recipePath)` | The images that belong to a recipe (`Name.ext`, `Name.N.ext`, `Name.S.N.ext`; jpg/jpeg/png/webp/heic in any case), title first, then `Name.N.ext` by step, then `Name.S.N.ext` by section and step; every extension variant of a slot is included. Opens no file |
 | `renamedCompanions(from, to)` | For each companion of `from`, its path once the recipe is at `to` (old stem swapped for the new, in `to`'s folder). A companion that would not move is not listed, so the list is empty when `from == to`. The caller moves the files |
 | `resolveReference(baseDir, reference)` | The file a `@./path` reference means, resolved against the collection root: a `.cook`/`.menu` suffix as written first, then `.cook`, then `.menu`, extension in any case; nothing when missing or outside the root |
 | `libraryVersion()` | Get the library version string |
@@ -299,8 +305,8 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 | `titleImage()` | `String?` | Title image path/URL |
 | `stepImages()` | `FfiStepImages` | Step images |
 | `isMenu()` | `Boolean` | Whether this is a .menu file |
-| `getStepImage(section, step)` | `String?` | Get specific step image |
-| `companionFiles()` | `List<String>` | Title and step images next to this recipe |
+| `getStepImage(section, step)` | `String?` | Get specific step image (`section` 0 for a recipe without sections; steps one-based) |
+| `companionFiles()` | `List<String>` | Title and step images next to this recipe; every extension variant of a slot is included |
 | `relatedFiles(baseDir)` | `List<String>` | Companions plus referenced recipes and menus, recursively; references resolve against `baseDir` |
 | `getMetadataValue(key)` | `String?` | Get metadata value as JSON |
 
@@ -409,7 +415,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 
 | Variant | Fields | Description |
 |---------|--------|-------------|
-| `RecipeReference` | `name`, `path`, `quantity?`, `unit?`, `scale: Double?` | `@./Folder/Recipe{2}`; `path` is relative to the library root, with `./` and `.cook` stripped (a `.menu` suffix is kept); to load it, look up `<path>.cook` (or `<path>` if it ends in `.menu`) under the base dir rather than passing it to `getRecipe` (dotted names like "Mr. Smith's Stew" break its extension detection); `scale` is set by `parseMenu` |
+| `RecipeReference` | `name`, `path`, `quantity?`, `unit?`, `scale: Double?` | `@./Folder/Recipe{2}`; `path` is relative to the library root, with `./` and `.cook` stripped (a `.menu` suffix is kept); to load it, pass `path` to `resolveReference(baseDir, path)`; do not append `.cook` by hand or pass it to `getRecipe`, which mis-detects an extension in dotted names such as "Mr. Smith's Stew"; `scale` is set by `parseMenu` |
 | `Ingredient` | `name`, `quantity?`, `unit?` | A loose ingredient; quantity as written |
 | `Text` | `text` | Connecting text such as ` with ` |
 | `Note` | `text` | A `-- comment` |

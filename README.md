@@ -7,7 +7,6 @@ A Rust library for finding and managing [Cooklang](https://cooklang.org/) recipe
 - **Recipe Search**: Find recipes by name or content across multiple directories
 - **Recipe Tree**: Build and navigate a hierarchical structure of your recipe collection
 - **Metadata Support**: Parse and access recipe metadata using the new frontmatter format
-- **Title Image Support**: Automatically find and associate images with recipes
 - **Structured Menus**: Parse `.menu` meal plans into days, meals, and items, with recipe reference scaling
 - **Companion Files**: The title and step images that belong to a recipe, and where they go on a rename
 - **Recipe References**: `@./path` references resolved with one root-relative rule
@@ -19,7 +18,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-cooklang-find = "0.9"
+cooklang-find = "0.11"
 ```
 
 ### iOS (Swift Package Manager)
@@ -342,9 +341,10 @@ Add @salt{1%tsp} to taste.
   `Name.S.N.ext` (section S, step N, both one-based); `StepImageCollection`
   keeps the two apart, and section 0 means "no sections"
 - Extensions jpg, jpeg, png, webp, heic, matched in any letter case; when a
-  slot has several, that order decides
-- One folder listing per recipe, shared by `title_image`, `step_images`
-  and `companion_files`
+  slot has several, `title_image` and `step_images` take the first in that
+  order and `companion_files` lists them all, in that order
+- A `RecipeEntry` lists the folder once and shares it between `title_image`,
+  `step_images` and `companion_files`
 
 ## Error Handling
 

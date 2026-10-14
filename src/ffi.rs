@@ -246,8 +246,8 @@ impl FfiRecipeEntry {
     }
 
     /// The title image and every step image next to this recipe, title
-    /// first, then by section and step. Never a referenced recipe. Empty
-    /// for content-based entries.
+    /// first, then `Name.N.ext` by step, then `Name.S.N.ext` by section and
+    /// step. Never a referenced recipe. Empty for content-based entries.
     pub fn companion_files(&self) -> Vec<String> {
         self.inner
             .companion_files()

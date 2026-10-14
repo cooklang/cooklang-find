@@ -73,8 +73,8 @@ struct RecipeSize {
 
 impl RecipeSize {
     /// Resolves `path` with [`resolve_reference`] in each base dir in turn
-    /// and reads the first match's metadata; a missing recipe is a default
-    /// (raw-multiplier) size.
+    /// and reads the first match's metadata; a missing recipe, or one whose
+    /// metadata cannot be read, is a default (raw-multiplier) size.
     fn load<P: AsRef<Utf8Path>>(base_dirs: &[P], path: &str) -> Self {
         base_dirs
             .iter()
@@ -83,6 +83,7 @@ impl RecipeSize {
             .map(|entry| Self::from_metadata(entry.metadata()))
             .unwrap_or_default()
     }
+
     fn from_metadata(metadata: &Metadata) -> Self {
         RecipeSize {
             servings: metadata.get("servings").and_then(value_number),
@@ -538,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_cook_suffix_in_any_case_is_looked_up_once() {
+    fn explicit_cook_suffix_in_any_case_is_found() {
         let (_t, dir) = recipes_dir();
         assert_eq!(
             resolve("@./Pancakes.COOK{4%servings}", &dir, 1.0),

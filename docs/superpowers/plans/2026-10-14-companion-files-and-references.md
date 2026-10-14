@@ -1894,6 +1894,7 @@ Spec: docs/superpowers/specs/2026-10-14-companion-files-and-references-design.md
 - image extensions matched in any case; `heic` added
 
 Breaking: `related_files(base_dir)`, `StepImageCollection { linear, sectioned }` (also its JSON), FFI step image `section` for sectioned images.
+Breaking also: menu scaling no longer follows a reference outside the root; image stems match exactly; `Name.01.jpg` is not a step image; references in comments/frontmatter are ignored.
 EOF
 )"
 ```
@@ -1908,6 +1909,10 @@ Run the `Release` workflow from `main` with version `0.11.0` (`gh workflow run r
 ### Breaking
 - `relatedFiles` now takes `baseDir` and resolves `@./path` references from the collection root (the same rule as `parseMenu`), no longer from the recipe's own folder.
 - Step images: `StepImageCollection` now has `linear` and `sectioned` maps (its JSON shape changed), and the FFI reports a sectioned image's real section, so `Name.1.2.jpg` is section 1 (it used to collapse into section 0).
+- `parseMenu` no longer loads a referenced recipe from outside the base dirs (`@../x` is treated as missing) and now resolves `@./Name.cook` and `@./Name.COOK`.
+- Image file stems must match the recipe's stem exactly (`pasta.jpg` is no longer the title image of `Pasta.cook` on a case-insensitive filesystem), and `Name.01.jpg` (leading zero) is not a step image.
+- `relatedFiles` ignores references inside frontmatter and comments, follows `.menu` references, and lists each file once.
+- `StepImageCollection` JSON: `images` (zero-based nested maps) is replaced by `linear` and `sectioned` with one-based keys.
 
 ### Added
 - `companionFiles`, `renamedCompanions`, `resolveReference`; `FfiRecipeEntry.companionFiles()`.

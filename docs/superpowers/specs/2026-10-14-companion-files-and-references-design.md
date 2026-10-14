@@ -67,8 +67,14 @@ Rules:
 - `ext` is matched case-insensitively against the shared list (§5). The
   returned path keeps the file's real spelling.
 - One `read_dir` of the recipe's folder. No recipe file is opened.
-- A folder that cannot be read, or a recipe path without a parent or stem,
-  yields an empty list. "No companions" is a normal state, not an error.
+- A recipe path with no directory component lists the current directory. A
+  folder that cannot be read, or a path without a stem, yields an empty
+  list. "No companions" is a normal state, not an error.
+- `N` and `S` are plain decimals with no leading zero (`Name.01.jpg` is not a
+  step image).
+- The stem is compared exactly, byte for byte, on every filesystem:
+  `pasta.jpg` is not a companion of `Pasta.cook` even where the filesystem
+  is case-insensitive.
 - If two files differ only by extension case or by extension
   (`Name.jpg` and `Name.PNG`), both are returned. `title_image()` keeps
   returning one: the first by the list order in §5, then by file name.
@@ -101,8 +107,10 @@ is not in the list.
 Pure path arithmetic after the one directory scan. Nothing at the destination
 is checked, so a collision there is the caller's to detect, the same way the
 caller already checks the recipe file itself. The caller is also responsible
-for ordering (move the recipe, then the companions, or the reverse). When
-`from == to` the list is empty: there is nothing to move.
+for ordering (move the recipe, then the companions, or the reverse). A
+companion whose new path equals its current path (same stem, same folder, as
+in a `.cook` → `.menu` rename) is not listed, so the list is empty when
+`from == to`.
 
 FFI: `renamed_companions(from: String, to: String) -> Vec<FfiRenamedFile>`
 with `FfiRenamedFile { from: String, to: String }`.
@@ -142,7 +150,9 @@ uses `resolve_reference` for every reference and `companion_files` for images,
 and keeps the recursion and cycle detection. Content-based entries still
 return an empty list. `Menu::resolve_scales` keeps its `base_dirs` slice and
 its FFI signature; it calls `resolve_reference` once per base dir, first hit
-wins, so the two cannot drift.
+wins, so the two cannot drift. A menu reference that leaves the root is
+treated as missing (raw multiplier), where 0.10 read the file from outside
+the root.
 
 Reference extraction: the regex `@(\.\.?/[^\s\{},.)]+)` in
 `recipe_entry.rs` is replaced by the scanner the menu parser already has.
@@ -176,6 +186,11 @@ word at `.` and `/` and so never accepts a braceless `@./Pesto`; an
 implementer must not "fix" it to match the parser. The menu tests in
 `menu/parse.rs` (`unbraced_recipe_reference` and neighbours) keep passing
 unchanged, which is the check that the move preserved the rule.
+
+Extraction skips YAML frontmatter and `[- ... -]` block comments and stops a
+line at `--`, as the menu parser does, so a commented-out reference is not
+followed. A fence line is `---` with trailing whitespace tolerated; an
+unclosed fence means no frontmatter.
 
 Cycle detection in `collect_related_files` keeps canonicalising paths for
 its visited set; that is about not visiting one file twice, not about

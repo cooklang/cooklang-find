@@ -268,6 +268,10 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 - `relatedFiles()` is now `relatedFiles(baseDir)`: references resolve against the collection root you pass, not the recipe's own folder, and a reference that leaves the root is not followed.
 - Step images: a sectioned image's `section` is now its real one-based section. `Name.1.2.jpg` reports `section: 1` (it used to collapse into section 0 and collide with `Name.2.jpg`). `getStepImage(0, n)` reads only `Name.n.ext`.
 - Image extensions match in any letter case, and `heic` is recognised.
+- `parseMenu` no longer loads a referenced recipe from outside the base dirs (`@../x` is treated as missing) and now resolves `@./Name.cook` and `@./Name.COOK`.
+- `relatedFiles` ignores references inside frontmatter and comments, follows `.menu` references, and lists each file once.
+- Image file stems must match the recipe's stem exactly; `pasta.jpg` is no longer the title image of `Pasta.cook` on a case-insensitive filesystem. `Name.01.jpg` (leading zero) is not a step image.
+- `StepImageCollection` JSON: `images` (zero-based nested maps) is replaced by `linear` and `sectioned` (one-based keys).
 
 ### Functions
 

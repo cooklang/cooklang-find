@@ -101,7 +101,6 @@ pub(crate) fn is_reference(name: &str) -> bool {
 ///
 /// Scans line by line with [`component`], so a name never spans lines, and
 /// stops a line at `--` (a comment).
-#[allow(dead_code)] // wired into related_files in a later commit
 pub(crate) fn extract_references(content: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut refs = Vec::new();

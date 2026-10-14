@@ -149,7 +149,7 @@ impl From<&Metadata> for FfiMetadata {
 /// A step image entry mapping section and step to an image path.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct StepImageEntry {
-    /// Section number (0 for linear recipes, 1+ for sectioned recipes)
+    /// Section number: 0 for a recipe without sections, the one-based section otherwise
     pub section: u32,
     /// Step number (1-indexed)
     pub step: u32,
@@ -168,40 +168,26 @@ pub struct FfiStepImages {
 
 impl From<&StepImageCollection> for FfiStepImages {
     fn from(c: &StepImageCollection) -> Self {
-        let mut images = Vec::new();
-
-        for (section_idx, steps) in &c.images {
-            for (step_idx, path) in steps {
-                // Convert back from zero-indexed storage to one-indexed API
-                let section = if *section_idx == 0 {
-                    0 // Linear recipe
-                } else {
-                    (*section_idx + 1) as u32 // Sectioned recipe
-                };
-                let step = (*step_idx + 1) as u32;
-
+        let mut images: Vec<StepImageEntry> = c
+            .linear
+            .iter()
+            .map(|(step, path)| StepImageEntry {
+                section: 0,
+                step: *step as u32,
+                image_path: path.clone(),
+            })
+            .collect();
+        for (section, steps) in &c.sectioned {
+            for (step, path) in steps {
                 images.push(StepImageEntry {
-                    section,
-                    step,
+                    section: *section as u32,
+                    step: *step as u32,
                     image_path: path.clone(),
                 });
             }
         }
-
-        // Sort by section then step for predictable ordering
-        images.sort_by(|a, b| {
-            let section_cmp = a.section.cmp(&b.section);
-            if section_cmp == std::cmp::Ordering::Equal {
-                a.step.cmp(&b.step)
-            } else {
-                section_cmp
-            }
-        });
-
-        FfiStepImages {
-            count: images.len() as u32,
-            images,
-        }
+        let count = images.len() as u32;
+        FfiStepImages { images, count }
     }
 }
 
@@ -1094,27 +1080,24 @@ mod tests {
     }
 
     #[test]
-    fn test_step_images_conversion() {
-        use std::collections::HashMap;
-
+    fn test_step_images_conversion_keeps_section_one() {
         let mut collection = StepImageCollection::default();
-        collection.images.insert(0, HashMap::new());
+        collection.linear.insert(1, "/r/Pasta.1.jpg".to_string());
+        collection.linear.insert(3, "/r/Pasta.3.jpg".to_string());
         collection
-            .images
-            .get_mut(&0)
-            .unwrap()
-            .insert(0, "/path/to/image1.jpg".to_string());
-        collection
-            .images
-            .get_mut(&0)
-            .unwrap()
-            .insert(2, "/path/to/image3.jpg".to_string());
+            .sectioned
+            .entry(1)
+            .or_default()
+            .insert(2, "/r/Pasta.1.2.jpg".to_string());
 
         let ffi_images = FfiStepImages::from(&collection);
-        assert_eq!(ffi_images.count, 2);
-        assert_eq!(ffi_images.images[0].section, 0);
-        assert_eq!(ffi_images.images[0].step, 1);
-        assert_eq!(ffi_images.images[1].step, 3);
+        assert_eq!(ffi_images.count, 3);
+        let listed: Vec<(u32, u32)> = ffi_images
+            .images
+            .iter()
+            .map(|i| (i.section, i.step))
+            .collect();
+        assert_eq!(listed, vec![(0, 1), (0, 3), (1, 2)]);
     }
 
     #[test]

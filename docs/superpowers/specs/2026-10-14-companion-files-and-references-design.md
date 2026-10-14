@@ -144,15 +144,22 @@ wins, so the two cannot drift.
 Reference extraction: the regex `@(\.\.?/[^\s\{},.)]+)` in
 `recipe_entry.rs` is replaced by the scanner the menu parser already has.
 `braced` and `single_word_len` move from `src/menu/parse.rs` into a shared
-`src/reference.rs` module (with a `component_name(body) -> Option<(&str,
-usize)>` wrapper) and both callers use it, so a `@./path` on a line means
-the same file whether it sits in a `.cook` or a `.menu`. The rule, as the
-menu parser has it today:
+`src/reference.rs` module behind one entry point,
+`component_name(body) -> Option<(&str, usize)>`, which also owns the three
+steps that live in `parse_component` today: rejecting `--` (a stray `@`
+before a comment), stripping one leading modifier (`?`, `+`, `-`, `&`), and
+skipping a trailing `(note)` after a braced component. The returned `usize`
+is bytes consumed from `body`, modifier and note included. Both callers use
+it, so a `@./path` on a line means the same file whether it sits in a
+`.cook` or a `.menu`. Content is scanned line by line, as `scan_items`
+does, so a name can never contain a newline. The rule, as the menu parser
+has it today:
 
-- Braced form: find the first `{`; the name is everything before it,
-  trailing whitespace trimmed. If that text is empty, starts with
-  whitespace, or contains `@`, `#`, `~`, `}` or `--`, it is not a braced
-  component and the single-word rule applies instead. So `Add @./Pesto
+- Braced form: find the first `{` with a `}` after it; the name is
+  everything before the `{`, trailing whitespace trimmed. If there is no
+  closing `}`, or that text is empty, starts with whitespace, or contains
+  `@`, `#`, `~`, `}` or `--`, it is not a braced component and the
+  single-word rule applies instead. So `Add @./Pesto
   Sauce and @salt{}` yields `./Pesto`, because the text before `{` contains
   `@`.
 - Single word: the name runs to the first whitespace or any of
@@ -227,6 +234,11 @@ New:
 - `cooklang_find::IMAGE_EXTENSIONS`
 - `RecipeEntry::companion_files()`
 
+`src/reference.rs` is a private module; `lib.rs` re-exports
+`resolve_reference` (`pub use reference::resolve_reference`) next to the
+existing `pub use model::*`. `companion_files`, `renamed_companions` and
+`RenamedFile` live in `model` and come through that existing re-export.
+
 Changed:
 
 - `RecipeEntry::related_files(base_dir)` (was no-arg, recipe-folder relative)
@@ -286,9 +298,9 @@ Reference extraction
 - `@./Pesto Sauce` (no braces) → `./Pesto`
 - `@./Dr.Cook{}` → `./Dr.Cook`; bare `@./Dr.Cook` → `./Dr.Cook`; bare
   `@./Sunday.menu` → `./Sunday.menu`; `Add @./Pesto.` → `./Pesto`
-- `Add @./Pesto Sauce and @salt{}` → `./Pesto` only; a reference at the end
-  of a line followed by `@salt{}` on the next line does not swallow the
-  newline
+- `Add @./Pesto Sauce and @salt{}` → `./Pesto` only; `@./Pesto` at the end
+  of a line followed by `then {` on the next line yields `./Pesto`, not a
+  name with a newline in it
 - `@-- comment` and `@?./Pesto{}` (modifier) behave as in the menu parser
 - duplicates collapsed, order kept
 - the existing `menu/parse.rs` tests pass unchanged after the move

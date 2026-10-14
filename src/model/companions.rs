@@ -5,11 +5,12 @@
 //! - `Name.N.ext` — step N of a recipe without sections
 //! - `Name.S.N.ext` — section S, step N
 //!
-//! `N` and `S` are one-based plain decimals, no leading zero. `ext` is one of [`IMAGE_EXTENSIONS`], in any
-//! ASCII case. `Name` is the recipe file's stem, so `Dr.Cook.cook` owns
+//! `N` and `S` are one-based plain decimals, no leading zero. `ext` is one
+//! of [`IMAGE_EXTENSIONS`], in any ASCII case. `Name` is the recipe file's stem, so `Dr.Cook.cook` owns
 //! `Dr.Cook.jpg`. Referenced recipes are never companions.
 
 use camino::{Utf8Path, Utf8PathBuf};
+use serde::Serialize;
 use std::fs;
 
 /// Image extensions a recipe's companions may have, in preference order
@@ -93,16 +94,52 @@ fn step_number(text: &str) -> Option<usize> {
     text.parse().ok()
 }
 
-/// The title image and every step and section image next to `recipe_path`,
-/// as paths in the recipe's folder, in the same form as `recipe_path`: title first, then linear steps by step, then sectioned
+/// The title image and every step and section image next to
+/// `recipe_path`, as paths in the recipe's folder, in the same form as
+/// `recipe_path`: title first, then linear steps by step, then sectioned
 /// images by section and step. Several files for one slot (`Name.jpg` and
-/// `Name.PNG`) are all returned, in [`IMAGE_EXTENSIONS`] order. A recipe this one references (`@./Other{}`) is not a companion; see
-/// [`resolve_reference`](crate::resolve_reference). Opens no file; see [`scan`] for what yields an empty
-/// list.
+/// `Name.PNG`) are all returned, in [`IMAGE_EXTENSIONS`] order. A recipe
+/// this one references (`@./Other{}`) is not a companion; see
+/// [`resolve_reference`](crate::resolve_reference). Opens no file; a path
+/// without a stem, or whose folder cannot be read, gives an empty list.
 pub fn companion_files(recipe_path: &Utf8Path) -> Vec<Utf8PathBuf> {
     scan(recipe_path)
         .into_iter()
         .map(|(_, path)| path)
+        .collect()
+}
+
+/// One companion's current path and where it goes when its recipe is
+/// renamed or moved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RenamedFile {
+    pub from: Utf8PathBuf,
+    pub to: Utf8PathBuf,
+}
+
+/// The companions of the recipe at `from` and their paths once the recipe
+/// is at `to` (another name, folder or extension): the old stem is
+/// replaced by the new one, in `to`'s folder. Pure path arithmetic after
+/// one folder scan; nothing at the destination is checked, and the recipe
+/// file itself is not listed. Empty when `from == to`.
+pub fn renamed_companions(from: &Utf8Path, to: &Utf8Path) -> Vec<RenamedFile> {
+    if from == to {
+        return Vec::new();
+    }
+    let (Some(old_stem), Some(new_stem), Some(new_dir)) =
+        (from.file_stem(), to.file_stem(), to.parent())
+    else {
+        return Vec::new();
+    };
+    companion_files(from)
+        .into_iter()
+        .filter_map(|path| {
+            let rest = path.file_name()?.strip_prefix(old_stem)?;
+            Some(RenamedFile {
+                to: new_dir.join(format!("{new_stem}{rest}")),
+                from: path,
+            })
+        })
         .collect()
 }
 
@@ -236,5 +273,60 @@ mod tests {
         std::env::set_current_dir(previous).unwrap();
         assert_eq!(names(&found), vec!["Pasta.jpg"]);
         assert_eq!(found[0], Utf8Path::new("Pasta.jpg"));
+    }
+
+    fn pairs(renamed: &[RenamedFile]) -> Vec<(String, String)> {
+        renamed
+            .iter()
+            .map(|r| (r.from.to_string(), r.to.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn rename_in_place() {
+        let (_t, dir) = root();
+        let recipe = touch(&dir, "Pasta.cook");
+        touch(&dir, "Pasta.jpg");
+        touch(&dir, "Pasta.2.1.PNG");
+        let renamed = renamed_companions(&recipe, &dir.join("Noodles.cook"));
+        assert_eq!(
+            pairs(&renamed),
+            vec![
+                (
+                    dir.join("Pasta.jpg").to_string(),
+                    dir.join("Noodles.jpg").to_string()
+                ),
+                (
+                    dir.join("Pasta.2.1.PNG").to_string(),
+                    dir.join("Noodles.2.1.PNG").to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn move_to_another_folder_and_change_kind() {
+        let (_t, dir) = root();
+        let recipe = touch(&dir, "Pasta.cook");
+        touch(&dir, "Pasta.1.jpg");
+        let target = dir.join("Mains/Pasta Bake.menu");
+        let renamed = renamed_companions(&recipe, &target);
+        assert_eq!(
+            pairs(&renamed),
+            vec![(
+                dir.join("Pasta.1.jpg").to_string(),
+                dir.join("Mains/Pasta Bake.1.jpg").to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn nothing_to_rename() {
+        let (_t, dir) = root();
+        let recipe = touch(&dir, "Pasta.cook");
+        touch(&dir, "Pasta.jpg");
+        assert!(renamed_companions(&recipe, &recipe).is_empty());
+        let bare = touch(&dir, "Bare.cook");
+        assert!(renamed_companions(&bare, &dir.join("Other.cook")).is_empty());
     }
 }

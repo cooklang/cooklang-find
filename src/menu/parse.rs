@@ -2,6 +2,7 @@
 
 use super::model::{Menu, MenuItem, MenuMeal, MenuSection};
 use crate::model::{parse_yaml_content, Metadata};
+use crate::reference::{component, is_reference, Component};
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -259,35 +260,9 @@ fn push_text(text: &str, items: &mut Vec<MenuItem>) {
 
 /// Parses the component after an `@`, returning it and the bytes consumed.
 fn parse_component(s: &str) -> Option<(MenuItem, usize)> {
-    // `@-- note` is a stray `@` before a comment, not an `@-` modifier.
-    if s.starts_with("--") {
-        return None;
-    }
-    // Modifiers (`@?`, `@+`, `@-`, `@&`) don't change what is listed.
-    let body = s.strip_prefix(['?', '+', '-', '&']).unwrap_or(s);
-    let modifiers = s.len() - body.len();
-
-    let (name, amount, len) = match braced(body) {
-        Some((name, amount, mut len)) => {
-            // Skip a trailing note such as `(cooked)`.
-            if body[len..].starts_with('(') {
-                if let Some(close) = body[len..].find(')') {
-                    len += close + 1;
-                }
-            }
-            (name, Some(amount), len)
-        }
-        None => {
-            let len = single_word_len(body);
-            if len == 0 {
-                return None;
-            }
-            (&body[..len], None, len)
-        }
-    };
-
+    let Component { name, amount, len } = component(s)?;
     let (quantity, unit) = split_amount(amount);
-    let item = if name.starts_with("./") || name.starts_with("../") {
+    let item = if is_reference(name) {
         recipe_reference(name, quantity, unit)?
     } else if name.is_empty() {
         return None;
@@ -298,32 +273,7 @@ fn parse_component(s: &str) -> Option<(MenuItem, usize)> {
             unit,
         }
     };
-    Some((item, modifiers + len))
-}
-
-/// Matches `name{amount}`, returning the name, the text inside the braces,
-/// and the bytes consumed. The name may contain spaces but no other
-/// component markers.
-fn braced(body: &str) -> Option<(&str, &str, usize)> {
-    let open = body.find('{')?;
-    let name = &body[..open];
-    if name.trim().is_empty()
-        || name.starts_with(char::is_whitespace)
-        || name.contains(['@', '#', '~', '}'])
-        || name.contains("--")
-    {
-        return None;
-    }
-    let close = open + body[open..].find('}')?;
-    Some((name.trim_end(), &body[open + 1..close], close + 1))
-}
-
-/// Length of an unbraced, single-word name.
-fn single_word_len(body: &str) -> usize {
-    let end = body
-        .find(|c: char| c.is_whitespace() || ",;:!?(){}@".contains(c))
-        .unwrap_or(body.len());
-    body[..end].trim_end_matches('.').len()
+    Some((item, len))
 }
 
 /// Splits `quantity%unit`, mapping blank parts to `None`.

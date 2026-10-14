@@ -60,6 +60,7 @@ pub mod search;
 /// Recipe tree building for directory hierarchies.
 pub mod tree;
 
+mod reference;
 mod walk;
 
 pub use fetcher::{get_recipe, get_recipe_str};

@@ -107,12 +107,13 @@ pub(crate) fn strip_block_comments(body: &str) -> Cow<'_, str> {
 }
 
 /// The content after an optional BOM and an optional leading `---` YAML
-/// frontmatter block: the text after the closing `---` line, or an empty
-/// string when the block is never closed. Content without frontmatter is
-/// returned unchanged.
+/// frontmatter block, as cooklang-rs reads it: a fence is a line that is
+/// `---` with any trailing whitespace (no leading whitespace), and an
+/// opening fence that is never closed is not frontmatter, so the whole
+/// content is returned. Content without frontmatter is returned unchanged.
 fn skip_frontmatter(content: &str) -> &str {
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
-    let is_fence = |line: &str| line.trim_end_matches(['\r', '\n']) == "---";
+    let is_fence = |line: &str| line.trim_end() == "---";
     let mut lines = content.split_inclusive('\n');
     let Some(first) = lines.next().filter(|first| is_fence(first)) else {
         return content;
@@ -124,7 +125,7 @@ fn skip_frontmatter(content: &str) -> &str {
             return &content[offset..];
         }
     }
-    ""
+    content
 }
 
 /// The recipe references in `content`, in order of first appearance,
@@ -368,9 +369,10 @@ mod tests {
         );
         assert_eq!(extract_references("\u{feff}---\n---\n@./Z{}"), vec!["./Z"]);
         assert_eq!(
-            extract_references("---\nno closing @./X{}"),
-            Vec::<String>::new()
+            extract_references("---\ntitle: x\n--- \n@./A{}"),
+            vec!["./A"]
         );
+        assert_eq!(extract_references("---\nno closing @./X{}"), vec!["./X"]);
     }
 
     fn root() -> (TempDir, Utf8PathBuf) {

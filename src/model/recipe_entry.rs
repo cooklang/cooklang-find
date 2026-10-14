@@ -551,7 +551,11 @@ fn collect_related_files(
     if !visited.insert(canonical(recipe_path)) {
         return;
     }
-    result.extend(scan(recipe_path).into_iter().map(|(_, path)| path));
+    for (_, companion) in scan(recipe_path) {
+        if !result.contains(&companion) {
+            result.push(companion);
+        }
+    }
 
     // Decoded lossily, so a stray non-UTF-8 byte does not hide references.
     let Ok(content) =
@@ -563,10 +567,11 @@ fn collect_related_files(
         let Some(file) = resolve_reference(base_dir, &reference) else {
             continue;
         };
-        if !visited.contains(&canonical(&file)) {
-            result.push(file.clone());
-            collect_related_files(base_dir, &file, visited, result);
+        if visited.contains(&canonical(&file)) {
+            continue;
         }
+        result.push(file.clone());
+        collect_related_files(base_dir, &file, visited, result);
     }
 }
 
@@ -1405,6 +1410,23 @@ mod tests {
 
         let recipe = RecipeEntry::from_path(plan).unwrap();
         assert_eq!(recipe.related_files(&temp_dir_path), vec![shown]);
+    }
+
+    #[test]
+    fn test_related_files_lists_shared_companions_once() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let cook = create_test_recipe(&temp_dir_path, "Pancakes", "Flip");
+        let menu = temp_dir_path.join("Pancakes.menu");
+        std::fs::write(&menu, "= Day\n- @./Pancakes{}\n").unwrap();
+        let image = create_test_image(&temp_dir_path, "Pancakes", "jpg");
+        let plan = create_test_recipe(&temp_dir_path, "Plan", "@./Pancakes{} @./Pancakes.menu{}");
+
+        let recipe = RecipeEntry::from_path(plan).unwrap();
+        assert_eq!(
+            recipe.related_files(&temp_dir_path),
+            vec![cook, image, menu]
+        );
     }
 
     fn temp_dir() -> (TempDir, Utf8PathBuf) {

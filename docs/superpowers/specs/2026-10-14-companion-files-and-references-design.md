@@ -72,8 +72,10 @@ Rules:
   returning one: the first by the list order in §5, then by file name.
 
 `title_image()` and `step_images()` are reworked onto the same directory scan
-so the three never disagree again. The `glob` dependency goes away with the
-old `find_step_images`.
+so the three never disagree again. The direct `glob()` call in
+`recipe_entry.rs` goes; the `glob` crate stays, since `walk.rs`, the tree,
+search and menu modules still use it. Likewise `regex` stays for
+`menu/parse.rs` even though `recipe_entry.rs` stops using it.
 
 FFI: `companion_files(recipe_path: String) -> Vec<String>` as a free function,
 and `FfiRecipeEntry::companion_files()` for an entry loaded from a path
@@ -97,7 +99,8 @@ is not in the list.
 Pure path arithmetic after the one directory scan. Nothing at the destination
 is checked, so a collision there is the caller's to detect, the same way the
 caller already checks the recipe file itself. The caller is also responsible
-for ordering (move the recipe, then the companions, or the reverse).
+for ordering (move the recipe, then the companions, or the reverse). When
+`from == to` the list is empty: there is nothing to move.
 
 FFI: `renamed_companions(from: String, to: String) -> Vec<FfiRenamedFile>`
 with `FfiRenamedFile { from: String, to: String }`.
@@ -116,8 +119,11 @@ Algorithm:
    The result must not escape the root: if `..` would pop past the start,
    return `None`.
 2. Join to `base_dir`.
-3. If the last segment has an extension, try it as written. Otherwise try
-   `.cook` then `.menu`.
+3. "Has an extension" means the last segment ends in `.cook` or `.menu`,
+   compared case-insensitively like `walk::has_extension`. Any other dot is
+   part of the name (`Dr.Cook`, `Mr. Smith's Stew`), which is what
+   `menu/scale.rs` already does. With such a suffix, try the path as
+   written. Otherwise try `<path>.cook` then `<path>.menu`.
 4. Return the first candidate that is an existing regular file, else `None`.
 
 No canonicalisation and no symlink following: step 1 is the containment check,
@@ -127,17 +133,22 @@ so a symlink inside the root that points outside is the user's choice.
 `RecipeEntry` and `related_files(base_dir: String)` on `FfiRecipeEntry`. It
 uses `resolve_reference` for every reference and `companion_files` for images,
 and keeps the recursion and cycle detection. Content-based entries still
-return an empty list. `parse_menu`'s own lookup is replaced by
-`resolve_reference` so the two cannot drift.
+return an empty list. `Menu::resolve_scales` keeps its `base_dirs` slice and
+its FFI signature; it calls `resolve_reference` once per base dir, first hit
+wins, so the two cannot drift.
 
 Reference extraction: the regex `@(\.\.?/[^\s\{},.)]+)` is replaced by a
-small scanner. After `@` and a leading `./` or `../`, the name runs to the
-first `{` when braces follow, otherwise to the first whitespace or
-punctuation that ends an ingredient (`,`, `.`, `)`, `}` or end of line).
-Dots inside the name are allowed (`Dr.Cook`, `Sunday.menu`); a trailing `.`
-is sentence punctuation, not part of the name. `@./Pesto Sauce{100%g}` yields
-`./Pesto Sauce`; `@./Pesto Sauce` without braces yields `./Pesto`, the same
-as the parser.
+small scanner that mirrors the parser's component rule
+(`cooklang-rs`, `parser/step.rs`, `comp_body`). After `@` and a leading `./`
+or `../`, scan forward to the first of `{`, `@`, `#`, `~` or end of line. If
+that stop is `{`, the name is everything before it, trimmed. Otherwise fall
+back to a single word: the name runs to the first whitespace or to `,`,
+`.`, `)`, `}` or end of line, so a trailing `.` is sentence punctuation.
+Dots inside a multi-word or braced name are allowed (`Dr.Cook`,
+`Sunday.menu`). Examples: `@./Pesto Sauce{100%g}` yields `./Pesto Sauce`;
+`@./Pesto Sauce` without braces yields `./Pesto`; `Add @./Pesto Sauce and
+@salt{}` yields `./Pesto`, because `@` stops the multi-word scan before any
+`{` is seen.
 
 ### 4. Step image storage
 
@@ -153,7 +164,13 @@ pub struct StepImageCollection {
 ```
 
 `get(section, step)`: `section == 0` reads `linear`, otherwise `sectioned`.
-`step == 0` is still `None`. `count()` and `is_empty()` cover both maps.
+`step == 0` is still `None`. `count()` and `is_empty()` cover both maps. Each
+slot holds one path: when `Name.1.jpg` and `Name.1.png` both exist the
+first by the §5 list order wins, the same tie-break as `title_image()`
+(the existing `test_recipe_step_image_extension_priority` expects jpg).
+`companion_files` returns both, in that same order. The struct derives
+`Serialize`, so the JSON shape changes from `images` to `linear` and
+`sectioned`; nothing in this repo reads it, but the release notes say so.
 
 FFI `FfiStepImages` keeps its shape (`images: Vec<StepImageEntry>`, `count`)
 but entries are now correct: linear images have `section: 0`, sectioned
@@ -227,12 +244,14 @@ Renamed companions
 
 - rename in place, move to another folder, move with a new name, `.cook` to
   `.menu`
-- recipe itself not included; empty when no companions
+- recipe itself not included; empty when no companions; empty when
+  `from == to`
 
 Reference resolution
 
 - `./Pesto` → `Pesto.cook`; `./Sunday` with only `Sunday.menu` → the menu;
-  `./Sunday.menu` as written
+  `./Sunday.menu` as written; `./Dr.Cook` → `Dr.Cook.cook`;
+  `./Sunday.MENU` as written
 - `../` from the root and `./../..` return `None`
 - `./a/../b` → `b.cook`
 - a folder named like the reference is not a match
@@ -243,6 +262,9 @@ Reference extraction
 - `@./Pesto Sauce{100%g}` → `./Pesto Sauce`
 - `@./Pesto Sauce` (no braces) → `./Pesto`
 - `@./Dr.Cook{}` → `./Dr.Cook`; `Add @./Pesto.` → `./Pesto`
+- `Add @./Pesto Sauce and @salt{}` → `./Pesto` only; a reference at the end
+  of a line followed by `@salt{}` on the next line does not swallow the
+  newline
 - duplicates collapsed, order kept
 
 Related files
@@ -266,7 +288,8 @@ same as its Rust counterpart on a fixture folder.
   image paragraph states one-based numbering and section 0 for linear.
 - BINDINGS.md: list the new exports.
 - Release notes on the GitHub release (the repo has no changelog file),
-  calling out the `related_files` signature and section-number change.
+  calling out the `related_files` signature, the section-number change and
+  the `StepImageCollection` JSON shape.
 - Bump `Cargo.toml` to 0.11.0, tag `v0.11.0`; `release.yml` publishes the
   Swift package and the crate as it does today.
 - Follow-ups outside this repo: a spec-repo PR for the README image section;

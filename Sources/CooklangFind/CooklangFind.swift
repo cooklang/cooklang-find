@@ -591,6 +591,13 @@ fileprivate struct FfiConverterString: FfiConverter {
 public protocol FfiRecipeEntryProtocol: AnyObject, Sendable {
     
     /**
+     * The title image and every step image next to this recipe, title
+     * first, then `Name.N.ext` by step, then `Name.S.N.ext` by section and
+     * step. Never a referenced recipe. Empty for content-based entries.
+     */
+    func companionFiles()  -> [String]
+    
+    /**
      * Returns the full content of the recipe.
      */
     func content() throws  -> String
@@ -634,12 +641,11 @@ public protocol FfiRecipeEntryProtocol: AnyObject, Sendable {
     func path()  -> String?
     
     /**
-     * Returns all file paths related to this recipe.
-     *
-     * Includes images, referenced recipe files, and recursively
-     * related files of referenced recipes.
+     * Returns every file this recipe depends on: its companion images, the
+     * recipes and menus it references (resolved against `base_dir`, the
+     * collection root), and recursively theirs.
      */
-    func relatedFiles()  -> [String]
+    func relatedFiles(baseDir: String)  -> [String]
     
     /**
      * Returns all step images for the recipe.
@@ -714,6 +720,20 @@ open class FfiRecipeEntry: FfiRecipeEntryProtocol, @unchecked Sendable {
 
     
 
+    
+    /**
+     * The title image and every step image next to this recipe, title
+     * first, then `Name.N.ext` by step, then `Name.S.N.ext` by section and
+     * step. Never a referenced recipe. Empty for content-based entries.
+     */
+open func companionFiles() -> [String]  {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_method_ffirecipeentry_companion_files(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
     
     /**
      * Returns the full content of the recipe.
@@ -818,16 +838,16 @@ open func path() -> String?  {
 }
     
     /**
-     * Returns all file paths related to this recipe.
-     *
-     * Includes images, referenced recipe files, and recursively
-     * related files of referenced recipes.
+     * Returns every file this recipe depends on: its companion images, the
+     * recipes and menus it references (resolved against `base_dir`, the
+     * collection root), and recursively theirs.
      */
-open func relatedFiles() -> [String]  {
+open func relatedFiles(baseDir: String) -> [String]  {
     return try!  FfiConverterSequenceString.lift(try! rustCall() {
         uniffiCallStatus in
     uniffi_cooklang_find_fn_method_ffirecipeentry_related_files(
-            self.uniffiCloneHandle(),uniffiCallStatus
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(baseDir),uniffiCallStatus
     )
 })
 }
@@ -1653,6 +1673,64 @@ public func FfiConverterTypeFfiMetadata_lower(_ value: FfiMetadata) -> RustBuffe
 
 
 /**
+ * A companion file's current path and where it goes when its recipe is
+ * renamed or moved.
+ */
+public struct FfiRenamedFile: Equatable, Hashable {
+    public let from: String
+    public let to: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(from: String, to: String) {
+        self.from = from
+        self.to = to
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiRenamedFile: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiRenamedFile: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiRenamedFile {
+        return
+            try FfiRenamedFile(
+                from: FfiConverterString.read(from: &buf), 
+                to: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiRenamedFile, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.from, into: &buf)
+        FfiConverterString.write(value.to, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiRenamedFile_lift(_ buf: RustBuffer) throws -> FfiRenamedFile {
+    return try FfiConverterTypeFfiRenamedFile.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiRenamedFile_lower(_ value: FfiRenamedFile) -> RustBuffer {
+    return FfiConverterTypeFfiRenamedFile.lower(value)
+}
+
+
+/**
  * FFI-safe representation of step images.
  */
 public struct FfiStepImages: Equatable, Hashable {
@@ -1888,7 +1966,7 @@ public func FfiConverterTypeMetadataEntry_lower(_ value: MetadataEntry) -> RustB
  */
 public struct StepImageEntry: Equatable, Hashable {
     /**
-     * Section number (0 for linear recipes, 1+ for sectioned recipes)
+     * Section number: 0 for a recipe without sections, the one-based section otherwise
      */
     public let section: UInt32
     /**
@@ -1904,7 +1982,7 @@ public struct StepImageEntry: Equatable, Hashable {
     // declare one manually.
     public init(
         /**
-         * Section number (0 for linear recipes, 1+ for sectioned recipes)
+         * Section number: 0 for a recipe without sections, the one-based section otherwise
          */section: UInt32, 
         /**
          * Step number (1-indexed)
@@ -2575,6 +2653,31 @@ fileprivate struct FfiConverterSequenceTypeFfiMenuSection: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiRenamedFile: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiRenamedFile]
+
+    public static func write(_ value: [FfiRenamedFile], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiRenamedFile.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiRenamedFile] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiRenamedFile]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiRenamedFile.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiTreeNode: FfiConverterRustBuffer {
     typealias SwiftType = [FfiTreeNode]
 
@@ -2688,6 +2791,22 @@ public func buildTree(baseDir: String)throws  -> FfiRecipeTree  {
         uniffiCallStatus in
     uniffi_cooklang_find_fn_func_build_tree(
         FfiConverterString.lower(baseDir),uniffiCallStatus
+    )
+})
+}
+/**
+ * Lists the images that belong to the recipe at `recipe_path`: `Name.ext`
+ * (title), `Name.N.ext` (step N, no sections) and `Name.S.N.ext` (section
+ * S, step N), one-based, extensions jpg/jpeg/png/webp/heic in any case.
+ * Title first, then `Name.N.ext` by step, then `Name.S.N.ext` by section and
+ * step; every extension variant of a slot is included. Opens no file. Empty
+ * when the folder cannot be read.
+ */
+public func companionFiles(recipePath: String) -> [String]  {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_companion_files(
+        FfiConverterString.lower(recipePath),uniffiCallStatus
     )
 })
 }
@@ -2898,6 +3017,38 @@ public func recipeFromPath(path: String)throws  -> FfiRecipeEntry  {
 })
 }
 /**
+ * For each companion of the recipe at `from`, where it goes when the
+ * recipe moves to `to` (a `.cook` or `.menu` file path): old stem replaced
+ * by the new stem, in `to`'s folder. A companion that would not move is
+ * not listed, so the list is empty when `from == to`. The caller performs
+ * the moves; nothing at the destination is checked.
+ */
+public func renamedCompanions(from: String, to: String) -> [FfiRenamedFile]  {
+    return try!  FfiConverterSequenceTypeFfiRenamedFile.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_renamed_companions(
+        FfiConverterString.lower(from),
+        FfiConverterString.lower(to),uniffiCallStatus
+    )
+})
+}
+/**
+ * Resolves a `@./path` reference against the collection root: `.` and
+ * `..` segments are normalised, a path leaving the root resolves to nothing, a
+ * `.cook`/`.menu` suffix is tried as written, then `<path>.cook` and
+ * `<path>.menu`, with the extension matched in any letter case. The first
+ * existing file, if any.
+ */
+public func resolveReference(baseDir: String, reference: String) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_cooklang_find_fn_func_resolve_reference(
+        FfiConverterString.lower(baseDir),
+        FfiConverterString.lower(reference),uniffiCallStatus
+    )
+})
+}
+/**
  * Searches for recipes matching a query string.
  *
  * Performs full-text search across recipe filenames and contents
@@ -2971,6 +3122,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_cooklang_find_checksum_func_build_tree() != 33412) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_cooklang_find_checksum_func_companion_files() != 52065) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_cooklang_find_checksum_func_count_recipes() != 13747) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3001,10 +3155,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_cooklang_find_checksum_func_recipe_from_path() != 52544) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_cooklang_find_checksum_func_renamed_companions() != 13313) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_cooklang_find_checksum_func_resolve_reference() != 38210) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_cooklang_find_checksum_func_search() != 48252) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_cooklang_find_checksum_func_search_with_metadata_filter() != 61491) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_companion_files() != 61528) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_cooklang_find_checksum_method_ffirecipeentry_content() != 9216) {
@@ -3031,7 +3194,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_cooklang_find_checksum_method_ffirecipeentry_path() != 23295) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_related_files() != 10559) {
+    if (uniffi_cooklang_find_checksum_method_ffirecipeentry_related_files() != 58393) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_cooklang_find_checksum_method_ffirecipeentry_step_images() != 49242) {

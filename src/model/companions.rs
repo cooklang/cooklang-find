@@ -6,8 +6,8 @@
 //! - `Name.S.N.ext` — section S, step N
 //!
 //! `N` and `S` are one-based plain decimals, no leading zero. `ext` is one
-//! of [`IMAGE_EXTENSIONS`], in any ASCII case. `Name` is the recipe file's stem, so `Dr.Cook.cook` owns
-//! `Dr.Cook.jpg`. Referenced recipes are never companions.
+//! of [`IMAGE_EXTENSIONS`], in any ASCII case. `Name` is the recipe file's
+//! stem, so `Dr.Cook.cook` owns `Dr.Cook.jpg`. Referenced recipes are never companions.
 
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;

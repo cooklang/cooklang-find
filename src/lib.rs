@@ -10,6 +10,9 @@
 //! - Extracting and working with recipe metadata
 //! - Parsing `.menu` files into structured days, meals, and items
 //!   ([`Menu`]), with recipe reference scaling
+//! - Companion files: the images that belong to a recipe, and where they
+//!   go on a rename
+//! - Resolving `@./path` references against the collection root
 //!
 //! ## Quick Start
 //!

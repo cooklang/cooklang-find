@@ -9,6 +9,8 @@ A Rust library for finding and managing [Cooklang](https://cooklang.org/) recipe
 - **Metadata Support**: Parse and access recipe metadata using the new frontmatter format
 - **Title Image Support**: Automatically find and associate images with recipes
 - **Structured Menus**: Parse `.menu` meal plans into days, meals, and items, with recipe reference scaling
+- Companion files: the title and step images that belong to a recipe, and where they go on a rename
+- Recipe references (`@./path`) resolved with one root-relative rule
 - **Error Handling**: Comprehensive error handling with custom error types
 
 ## Installation
@@ -246,6 +248,50 @@ On iOS and Android, `parseMenu(path, baseDirs, scale)` returns the same
 structure as `FfiMenu`, with `dates`, `firstDate`, `lastDate` and
 `recipeReferences` precomputed (see [BINDINGS.md](BINDINGS.md)).
 
+### Companion Files
+
+A recipe's images sit next to it and share its stem: `Pasta.jpg` is the
+title image, `Pasta.2.jpg` step 2 of a recipe without sections, and
+`Pasta.1.2.jpg` section 1, step 2. Steps and sections are one-based.
+Extensions are jpg, jpeg, png, webp and heic, in any letter case.
+
+```rust
+use cooklang_find::{companion_files, renamed_companions};
+use camino::Utf8Path;
+
+let recipe = Utf8Path::new("recipes/Pasta.cook");
+for image in companion_files(recipe) {
+    println!("{image}");
+}
+
+// Planning a rename: the caller moves the files.
+for file in renamed_companions(recipe, Utf8Path::new("recipes/Mains/Noodles.cook")) {
+    println!("{} -> {}", file.from, file.to);
+}
+```
+
+### Resolving References
+
+`@./sauces/Pesto{100%g}` in a recipe or menu names another file in the
+collection. References resolve against the collection root, never the
+referencing file's folder, so the same reference means the same file from
+anywhere in the tree. `.cook` is tried before `.menu`; a reference that
+leaves the root is `None`.
+
+```rust
+use cooklang_find::{resolve_reference, RecipeEntry};
+use camino::{Utf8Path, Utf8PathBuf};
+
+let root = Utf8Path::new("recipes");
+let pesto = resolve_reference(root, "./sauces/Pesto");
+
+// Everything a recipe depends on, recursively: images, referenced recipes
+// and menus, and theirs.
+let recipe = RecipeEntry::from_path(Utf8PathBuf::from("recipes/Pasta.cook"))?;
+let files = recipe.related_files(root);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 ## Recipe Format
 
 The library supports Cooklang recipes with frontmatter metadata. Example:
@@ -291,11 +337,15 @@ Add @salt{1%tsp} to taste.
 - Support for custom metadata fields
 - Cached metadata access for performance
 
-### Title Image Support
-- Automatic discovery of recipe images
-- Support for multiple image formats (jpg, jpeg, png, webp)
-- Case-insensitive extension matching
-- Automatic association with recipes
+### Images
+- Title image: `Name.ext` next to the recipe
+- Step images: `Name.N.ext` (step N, one-based, no sections) and
+  `Name.S.N.ext` (section S, step N, both one-based); `StepImageCollection`
+  keeps the two apart, and section 0 means "no sections"
+- Extensions jpg, jpeg, png, webp, heic, matched in any letter case; when a
+  slot has several, that order decides
+- One folder listing per recipe, shared by `title_image`, `step_images`
+  and `companion_files`
 
 ## Error Handling
 

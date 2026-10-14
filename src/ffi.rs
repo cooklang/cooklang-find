@@ -863,7 +863,7 @@ pub fn count_recipes(dir: String) -> Result<u32, CooklangError> {
 /// Lists the images that belong to the recipe at `recipe_path`: `Name.ext`
 /// (title), `Name.N.ext` (step N, no sections) and `Name.S.N.ext` (section
 /// S, step N), one-based, extensions jpg/jpeg/png/webp/heic in any case.
-/// Title first, then by section and step; every extension variant of a slot
+/// Title first, then `Name.N.ext` by step, then `Name.S.N.ext` by section and step; every extension variant of a slot
 /// is included. Opens no file. Empty when the folder cannot be read.
 #[uniffi::export]
 pub fn companion_files(recipe_path: String) -> Vec<String> {
@@ -890,10 +890,10 @@ pub fn renamed_companions(from: String, to: String) -> Vec<FfiRenamedFile> {
 }
 
 /// Resolves a `@./path` reference against the collection root: `.` and
-/// `..` segments are normalised, a path leaving the root is `nil`, a
+/// `..` segments are normalised, a path leaving the root resolves to nothing, a
 /// `.cook`/`.menu` suffix is tried as written, then `<path>.cook` and
 /// `<path>.menu`, with the extension matched in any letter case. The first
-/// existing file, or `nil`.
+/// existing file, if any.
 #[uniffi::export]
 pub fn resolve_reference(base_dir: String, reference: String) -> Option<String> {
     resolve_reference_internal(Utf8Path::new(&base_dir), &reference).map(|p| p.to_string())
@@ -1308,6 +1308,7 @@ mod tests {
         ];
         assert_eq!(companion_files(path.clone()), expected);
         assert_eq!(recipe_from_path(path).unwrap().companion_files(), expected);
+        assert!(companion_files(format!("{temp_path}/missing/X.cook")).is_empty());
     }
 
     #[test]

@@ -36,7 +36,9 @@ In:
    that reports section 1 as 1.
 5. One image extension list, matched in any letter case.
 6. A corrected reference regex (names with spaces and dots).
-7. Docs, tests, 0.11.0 release.
+7. The reference scanner shared between recipes and menus
+   (`src/reference.rs`).
+8. Docs, tests, 0.11.0 release.
 
 Out:
 
@@ -122,8 +124,10 @@ Algorithm:
 3. "Has an extension" means the last segment ends in `.cook` or `.menu`,
    compared case-insensitively like `walk::has_extension`. Any other dot is
    part of the name (`Dr.Cook`, `Mr. Smith's Stew`), which is what
-   `menu/scale.rs` already does. With such a suffix, try the path as
-   written. Otherwise try `<path>.cook` then `<path>.menu`.
+   `menu/scale.rs` already does for `.menu`. With such a suffix, try the
+   path as written. Otherwise try `<path>.cook` then `<path>.menu`. This
+   also fixes `menu/scale.rs`, which today turns `./Pesto.cook` into
+   `Pesto.cook.cook`; the menu scaling tests gain that case.
 4. Return the first candidate that is an existing regular file, else `None`.
 
 No canonicalisation and no symlink following: step 1 is the containment check,
@@ -137,18 +141,36 @@ return an empty list. `Menu::resolve_scales` keeps its `base_dirs` slice and
 its FFI signature; it calls `resolve_reference` once per base dir, first hit
 wins, so the two cannot drift.
 
-Reference extraction: the regex `@(\.\.?/[^\s\{},.)]+)` is replaced by a
-small scanner that mirrors the parser's component rule
-(`cooklang-rs`, `parser/step.rs`, `comp_body`). After `@` and a leading `./`
-or `../`, scan forward to the first of `{`, `@`, `#`, `~` or end of line. If
-that stop is `{`, the name is everything before it, trimmed. Otherwise fall
-back to a single word: the name runs to the first whitespace or to `,`,
-`.`, `)`, `}` or end of line, so a trailing `.` is sentence punctuation.
-Dots inside a multi-word or braced name are allowed (`Dr.Cook`,
-`Sunday.menu`). Examples: `@./Pesto Sauce{100%g}` yields `./Pesto Sauce`;
-`@./Pesto Sauce` without braces yields `./Pesto`; `Add @./Pesto Sauce and
-@salt{}` yields `./Pesto`, because `@` stops the multi-word scan before any
-`{` is seen.
+Reference extraction: the regex `@(\.\.?/[^\s\{},.)]+)` in
+`recipe_entry.rs` is replaced by the scanner the menu parser already has.
+`braced` and `single_word_len` move from `src/menu/parse.rs` into a shared
+`src/reference.rs` module (with a `component_name(body) -> Option<(&str,
+usize)>` wrapper) and both callers use it, so a `@./path` on a line means
+the same file whether it sits in a `.cook` or a `.menu`. The rule, as the
+menu parser has it today:
+
+- Braced form: find the first `{`; the name is everything before it,
+  trailing whitespace trimmed. If that text is empty, starts with
+  whitespace, or contains `@`, `#`, `~`, `}` or `--`, it is not a braced
+  component and the single-word rule applies instead. So `Add @./Pesto
+  Sauce and @salt{}` yields `./Pesto`, because the text before `{` contains
+  `@`.
+- Single word: the name runs to the first whitespace or any of
+  `,;:!?(){}@`, then trailing dots are trimmed. Dots inside the word stay:
+  bare `@./Dr.Cook` yields `./Dr.Cook`, bare `@./Sunday.menu` yields
+  `./Sunday.menu`, `Add @./Pesto.` yields `./Pesto`.
+
+Only names starting with `./` or `../` are references. This single-word
+rule is deliberately more lenient than cooklang-rs, whose lexer breaks a
+word at `.` and `/` and so never accepts a braceless `@./Pesto`; an
+implementer must not "fix" it to match the parser. The menu tests in
+`menu/parse.rs` (`unbraced_recipe_reference` and neighbours) keep passing
+unchanged, which is the check that the move preserved the rule.
+
+Cycle detection in `collect_related_files` keeps canonicalising paths for
+its visited set; that is about not visiting one file twice, not about
+where a reference points, so §3's "no canonicalisation" applies to
+`resolve_reference` alone.
 
 ### 4. Step image storage
 
@@ -251,7 +273,8 @@ Reference resolution
 
 - `./Pesto` → `Pesto.cook`; `./Sunday` with only `Sunday.menu` → the menu;
   `./Sunday.menu` as written; `./Dr.Cook` → `Dr.Cook.cook`;
-  `./Sunday.MENU` as written
+  `./Sunday.MENU` as written; `./Pesto.cook` → `Pesto.cook` (not
+  `Pesto.cook.cook`), also through `parse_menu`
 - `../` from the root and `./../..` return `None`
 - `./a/../b` → `b.cook`
 - a folder named like the reference is not a match
@@ -261,11 +284,14 @@ Reference extraction
 
 - `@./Pesto Sauce{100%g}` → `./Pesto Sauce`
 - `@./Pesto Sauce` (no braces) → `./Pesto`
-- `@./Dr.Cook{}` → `./Dr.Cook`; `Add @./Pesto.` → `./Pesto`
+- `@./Dr.Cook{}` → `./Dr.Cook`; bare `@./Dr.Cook` → `./Dr.Cook`; bare
+  `@./Sunday.menu` → `./Sunday.menu`; `Add @./Pesto.` → `./Pesto`
 - `Add @./Pesto Sauce and @salt{}` → `./Pesto` only; a reference at the end
   of a line followed by `@salt{}` on the next line does not swallow the
   newline
+- `@-- comment` and `@?./Pesto{}` (modifier) behave as in the menu parser
 - duplicates collapsed, order kept
+- the existing `menu/parse.rs` tests pass unchanged after the move
 
 Related files
 
@@ -284,8 +310,9 @@ same as its Rust counterpart on a fixture folder.
 
 ## Docs and release
 
-- README: new "Companion files" and "Resolving references" sections; the step
-  image paragraph states one-based numbering and section 0 for linear.
+- README: new "Companion files" and "Resolving references" sections, and a
+  new step image paragraph next to "Title Image Support" stating one-based
+  numbering and section 0 for linear recipes.
 - BINDINGS.md: list the new exports.
 - Release notes on the GitHub release (the repo has no changelog file),
   calling out the `related_files` signature, the section-number change and

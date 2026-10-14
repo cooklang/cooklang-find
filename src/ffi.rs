@@ -9,7 +9,11 @@ use crate::menu::{
     list_menus_for_date as list_menus_for_date_internal, Menu, MenuError, MenuItem, MenuMeal,
     MenuSection,
 };
-use crate::model::{Metadata, RecipeEntry, RecipeEntryError, StepImageCollection};
+use crate::model::{
+    companion_files as companion_files_internal, renamed_companions as renamed_companions_internal,
+    Metadata, RecipeEntry, RecipeEntryError, StepImageCollection,
+};
+use crate::reference::resolve_reference as resolve_reference_internal;
 use crate::search::{
     search as search_internal, search_with_filter as search_with_filter_internal, MetadataFilter,
     SearchError,
@@ -149,7 +153,7 @@ impl From<&Metadata> for FfiMetadata {
 /// A step image entry mapping section and step to an image path.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct StepImageEntry {
-    /// Section number (0 for linear recipes, 1+ for sectioned recipes)
+    /// Section number: 0 for a recipe without sections, the one-based section otherwise
     pub section: u32,
     /// Step number (1-indexed)
     pub step: u32,
@@ -168,40 +172,26 @@ pub struct FfiStepImages {
 
 impl From<&StepImageCollection> for FfiStepImages {
     fn from(c: &StepImageCollection) -> Self {
-        let mut images = Vec::new();
-
-        for (section_idx, steps) in &c.images {
-            for (step_idx, path) in steps {
-                // Convert back from zero-indexed storage to one-indexed API
-                let section = if *section_idx == 0 {
-                    0 // Linear recipe
-                } else {
-                    (*section_idx + 1) as u32 // Sectioned recipe
-                };
-                let step = (*step_idx + 1) as u32;
-
+        let mut images: Vec<StepImageEntry> = c
+            .linear
+            .iter()
+            .map(|(step, path)| StepImageEntry {
+                section: 0,
+                step: *step as u32,
+                image_path: path.clone(),
+            })
+            .collect();
+        for (section, steps) in &c.sectioned {
+            for (step, path) in steps {
                 images.push(StepImageEntry {
-                    section,
-                    step,
+                    section: *section as u32,
+                    step: *step as u32,
                     image_path: path.clone(),
                 });
             }
         }
-
-        // Sort by section then step for predictable ordering
-        images.sort_by(|a, b| {
-            let section_cmp = a.section.cmp(&b.section);
-            if section_cmp == std::cmp::Ordering::Equal {
-                a.step.cmp(&b.step)
-            } else {
-                section_cmp
-            }
-        });
-
-        FfiStepImages {
-            count: images.len() as u32,
-            images,
-        }
+        let count = images.len() as u32;
+        FfiStepImages { images, count }
     }
 }
 
@@ -255,6 +245,17 @@ impl FfiRecipeEntry {
         FfiStepImages::from(self.inner.step_images())
     }
 
+    /// The title image and every step image next to this recipe, title
+    /// first, then `Name.N.ext` by step, then `Name.S.N.ext` by section and
+    /// step. Never a referenced recipe. Empty for content-based entries.
+    pub fn companion_files(&self) -> Vec<String> {
+        self.inner
+            .companion_files()
+            .into_iter()
+            .map(|p| p.to_string())
+            .collect()
+    }
+
     /// Returns true if this is a menu file (.menu) rather than a recipe (.cook).
     pub fn is_menu(&self) -> bool {
         self.inner.is_menu()
@@ -279,13 +280,12 @@ impl FfiRecipeEntry {
             .map(|v| serde_json::to_string(v).unwrap_or_default())
     }
 
-    /// Returns all file paths related to this recipe.
-    ///
-    /// Includes images, referenced recipe files, and recursively
-    /// related files of referenced recipes.
-    pub fn related_files(&self) -> Vec<String> {
+    /// Returns every file this recipe depends on: its companion images, the
+    /// recipes and menus it references (resolved against `base_dir`, the
+    /// collection root), and recursively theirs.
+    pub fn related_files(&self, base_dir: String) -> Vec<String> {
         self.inner
-            .related_files()
+            .related_files(Utf8Path::new(&base_dir))
             .into_iter()
             .map(|p| p.to_string())
             .collect()
@@ -416,6 +416,14 @@ pub struct FfiDirListing {
     pub path: String,
     /// Its recipes and subfolders, sorted by file name
     pub entries: Vec<FfiDirEntry>,
+}
+
+/// A companion file's current path and where it goes when its recipe is
+/// renamed or moved.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiRenamedFile {
+    pub from: String,
+    pub to: String,
 }
 
 /// A menu file found by `list_menus_between`, with its parsed content.
@@ -852,6 +860,46 @@ pub fn count_recipes(dir: String) -> Result<u32, CooklangError> {
     Ok(count_recipes_internal(&dir)? as u32)
 }
 
+/// Lists the images that belong to the recipe at `recipe_path`: `Name.ext`
+/// (title), `Name.N.ext` (step N, no sections) and `Name.S.N.ext` (section
+/// S, step N), one-based, extensions jpg/jpeg/png/webp/heic in any case.
+/// Title first, then `Name.N.ext` by step, then `Name.S.N.ext` by section and
+/// step; every extension variant of a slot is included. Opens no file. Empty
+/// when the folder cannot be read.
+#[uniffi::export]
+pub fn companion_files(recipe_path: String) -> Vec<String> {
+    companion_files_internal(Utf8Path::new(&recipe_path))
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect()
+}
+
+/// For each companion of the recipe at `from`, where it goes when the
+/// recipe moves to `to` (a `.cook` or `.menu` file path): old stem replaced
+/// by the new stem, in `to`'s folder. A companion that would not move is
+/// not listed, so the list is empty when `from == to`. The caller performs
+/// the moves; nothing at the destination is checked.
+#[uniffi::export]
+pub fn renamed_companions(from: String, to: String) -> Vec<FfiRenamedFile> {
+    renamed_companions_internal(Utf8Path::new(&from), Utf8Path::new(&to))
+        .into_iter()
+        .map(|r| FfiRenamedFile {
+            from: r.from.to_string(),
+            to: r.to.to_string(),
+        })
+        .collect()
+}
+
+/// Resolves a `@./path` reference against the collection root: `.` and
+/// `..` segments are normalised, a path leaving the root resolves to nothing, a
+/// `.cook`/`.menu` suffix is tried as written, then `<path>.cook` and
+/// `<path>.menu`, with the extension matched in any letter case. The first
+/// existing file, if any.
+#[uniffi::export]
+pub fn resolve_reference(base_dir: String, reference: String) -> Option<String> {
+    resolve_reference_internal(Utf8Path::new(&base_dir), &reference).map(|p| p.to_string())
+}
+
 /// Returns the library version.
 #[uniffi::export]
 pub fn library_version() -> String {
@@ -1094,27 +1142,24 @@ mod tests {
     }
 
     #[test]
-    fn test_step_images_conversion() {
-        use std::collections::HashMap;
-
+    fn test_step_images_conversion_keeps_section_one() {
         let mut collection = StepImageCollection::default();
-        collection.images.insert(0, HashMap::new());
+        collection.linear.insert(1, "/r/Pasta.1.jpg".to_string());
+        collection.linear.insert(3, "/r/Pasta.3.jpg".to_string());
         collection
-            .images
-            .get_mut(&0)
-            .unwrap()
-            .insert(0, "/path/to/image1.jpg".to_string());
-        collection
-            .images
-            .get_mut(&0)
-            .unwrap()
-            .insert(2, "/path/to/image3.jpg".to_string());
+            .sectioned
+            .entry(1)
+            .or_default()
+            .insert(2, "/r/Pasta.1.2.jpg".to_string());
 
         let ffi_images = FfiStepImages::from(&collection);
-        assert_eq!(ffi_images.count, 2);
-        assert_eq!(ffi_images.images[0].section, 0);
-        assert_eq!(ffi_images.images[0].step, 1);
-        assert_eq!(ffi_images.images[1].step, 3);
+        assert_eq!(ffi_images.count, 3);
+        let listed: Vec<(u32, u32)> = ffi_images
+            .images
+            .iter()
+            .map(|i| (i.section, i.step))
+            .collect();
+        assert_eq!(listed, vec![(0, 1), (0, 3), (1, 2)]);
     }
 
     #[test]
@@ -1144,7 +1189,7 @@ mod tests {
         );
 
         let recipe = recipe_from_path(path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(temp_path.to_string());
 
         assert_eq!(files.len(), 2);
         assert!(files.iter().any(|f| f.ends_with("Hollandaise.cook")));
@@ -1248,5 +1293,92 @@ mod tests {
         let result = parse_menu(path, vec![dir.to_string()], 1.0);
 
         assert!(matches!(result, Err(CooklangError::MenuError { .. })));
+    }
+
+    #[test]
+    fn test_companion_files_ffi() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+        let path = create_test_recipe(temp_path, "Pasta", "Boil");
+        fs::write(format!("{temp_path}/Pasta.JPG"), b"").unwrap();
+        fs::write(format!("{temp_path}/Pasta.1.2.png"), b"").unwrap();
+
+        let expected = vec![
+            Utf8Path::new(temp_path).join("Pasta.JPG").to_string(),
+            Utf8Path::new(temp_path).join("Pasta.1.2.png").to_string(),
+        ];
+        assert_eq!(companion_files(path.clone()), expected);
+        assert_eq!(recipe_from_path(path).unwrap().companion_files(), expected);
+        assert!(companion_files(
+            Utf8Path::new(temp_path)
+                .join("missing")
+                .join("X.cook")
+                .to_string()
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn test_renamed_companions_ffi() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+        let path = create_test_recipe(temp_path, "Pasta", "Boil");
+        fs::write(format!("{temp_path}/Pasta.1.jpg"), b"").unwrap();
+
+        let renamed = renamed_companions(
+            path,
+            Utf8Path::new(temp_path).join("Noodles.cook").to_string(),
+        );
+        assert_eq!(renamed.len(), 1);
+        assert_eq!(
+            renamed[0].from,
+            Utf8Path::new(temp_path).join("Pasta.1.jpg").to_string()
+        );
+        assert_eq!(
+            renamed[0].to,
+            Utf8Path::new(temp_path).join("Noodles.1.jpg").to_string()
+        );
+    }
+
+    #[test]
+    fn test_resolve_reference_ffi() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+        create_test_recipe(temp_path, "Pesto", "Blend");
+
+        assert_eq!(
+            resolve_reference(temp_path.to_string(), "./Pesto".to_string()),
+            Some(Utf8Path::new(temp_path).join("Pesto.cook").to_string())
+        );
+        assert_eq!(
+            resolve_reference(temp_path.to_string(), "../Pesto".to_string()),
+            None
+        );
+    }
+
+    #[test]
+    fn test_get_step_image_section_numbers() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().to_str().unwrap();
+        let path = create_test_recipe(temp_path, "Pasta", "Boil");
+        fs::write(format!("{temp_path}/Pasta.2.jpg"), b"").unwrap();
+        fs::write(format!("{temp_path}/Pasta.1.2.jpg"), b"").unwrap();
+
+        let recipe = recipe_from_path(path).unwrap();
+        assert_eq!(
+            recipe.get_step_image(0, 2),
+            Some(Utf8Path::new(temp_path).join("Pasta.2.jpg").to_string())
+        );
+        assert_eq!(
+            recipe.get_step_image(1, 2),
+            Some(Utf8Path::new(temp_path).join("Pasta.1.2.jpg").to_string())
+        );
+        let sections: Vec<u32> = recipe
+            .step_images()
+            .images
+            .iter()
+            .map(|i| i.section)
+            .collect();
+        assert_eq!(sections, vec![0, 1]);
     }
 }

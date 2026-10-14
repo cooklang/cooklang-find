@@ -58,10 +58,9 @@ pub enum MenuItem {
         name: String,
         /// Path relative to the library root, with `./` and `.cook`
         /// stripped (a `.menu` suffix is kept), e.g. "Breakfast/Pancakes"
-        /// or "Weekly.menu". To load it, look up `<path>.cook` (or `<path>`
-        /// if it ends in `.menu`) under the base dir. Don't pass it to
-        /// `get_recipe` directly: a dotted name like "Mr. Smith's Stew"
-        /// would be mistaken for one with an extension.
+        /// or "Weekly.menu". To load it, pass it to
+        /// [`crate::resolve_reference`] with the base dir, as
+        /// [`Menu::resolve_scales`] does; do not append `.cook` by hand.
         path: String,
         /// Target quantity as authored, e.g. "2" or "1/2".
         quantity: Option<String>,

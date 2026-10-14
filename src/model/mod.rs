@@ -3,10 +3,12 @@
 //! This module contains the fundamental data structures used throughout
 //! the library, including recipe entries and their associated metadata.
 
+pub(crate) mod companions;
 pub(crate) mod lossy;
 mod metadata;
 mod recipe_entry;
 
+pub use companions::{companion_files, renamed_companions, RenamedFile, IMAGE_EXTENSIONS};
 pub use metadata::Metadata;
 pub use recipe_entry::{RecipeEntry, RecipeEntryError, StepImageCollection};
 

@@ -10,6 +10,9 @@
 //! - Extracting and working with recipe metadata
 //! - Parsing `.menu` files into structured days, meals, and items
 //!   ([`Menu`]), with recipe reference scaling
+//! - Companion files: the images that belong to a recipe, and where they
+//!   go on a rename
+//! - Resolving `@./path` references against the collection root
 //!
 //! ## Quick Start
 //!
@@ -60,6 +63,7 @@ pub mod search;
 /// Recipe tree building for directory hierarchies.
 pub mod tree;
 
+mod reference;
 mod walk;
 
 pub use fetcher::{get_recipe, get_recipe_str};
@@ -67,6 +71,7 @@ pub use menu::{
     list_menus_between, list_menus_for_date, Menu, MenuItem, MenuMatch, MenuMeal, MenuSection,
 };
 pub use model::*;
+pub use reference::resolve_reference;
 pub use search::{
     filter_by_metadata, search, search_with_filter, Condition, MetadataFilter, OneOrMany,
 };

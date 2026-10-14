@@ -1,77 +1,89 @@
+use super::companions::{scan, Slot};
 use super::lossy::{lines_lossy, read_to_string_lossy};
 use super::metadata::{extract_and_parse_metadata, Metadata};
 use crate::menu::Menu;
+use crate::reference::{extract_references, resolve_reference};
 use camino::{Utf8Path, Utf8PathBuf};
-use glob::glob;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
-use std::path::Path;
 use std::sync::OnceLock;
 use thiserror::Error;
 
-/// Represents the complete collection of step images for a recipe.
+/// A recipe's step and section images, by one-based step number.
 ///
-/// Images are discovered based on the Cooklang naming convention:
-/// - `RecipeName.N.ext`: Stored at \[0\]\[N-1\] (section 0 = linear/no section)
-/// - `RecipeName.S.N.ext`: Stored at \[S-1\]\[N-1\] (section S, step N)
+/// - `RecipeName.N.ext` is step N of a recipe without sections: `linear[N]`
+/// - `RecipeName.S.N.ext` is section S, step N: `sectioned[S][N]`
 ///
-/// File numbering is one-indexed (Recipe.1.jpg = first step)
-/// Internal HashMap keys are zero-indexed
-/// Section 0 is reserved for linear recipes without sections.
-///
-/// Supported extensions: jpg, jpeg, png, webp
-#[derive(Debug, Clone, Serialize, Default)]
+/// One path per slot; when several extensions exist for a step the first in
+/// [`IMAGE_EXTENSIONS`](crate::IMAGE_EXTENSIONS) order wins.
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
 pub struct StepImageCollection {
-    /// Two-dimensional map: section_index -> step_index -> image_path
-    /// - Section 0: steps for linear recipes (Recipe.N.ext stored at \[0\]\[N-1\])
-    /// - Section 1+: steps within sections (Recipe.S.N.ext stored at \[S-1\]\[N-1\])
-    ///
-    /// HashMap keys are zero-indexed
-    pub images: HashMap<usize, HashMap<usize, String>>,
+    /// `Name.N.ext`, keyed by one-based step.
+    pub linear: BTreeMap<usize, String>,
+    /// `Name.S.N.ext`, keyed by one-based section, then one-based step.
+    pub sectioned: BTreeMap<usize, BTreeMap<usize, String>>,
 }
 
 impl StepImageCollection {
-    /// Returns true if there are any images in the collection
+    /// Returns true if there are no images at all.
     pub fn is_empty(&self) -> bool {
-        self.images.is_empty()
+        self.linear.is_empty() && self.sectioned.is_empty()
     }
 
-    /// Returns total count of all images across all sections
+    /// Total number of images across both kinds.
     pub fn count(&self) -> usize {
-        self.images.values().map(|steps| steps.len()).sum()
+        self.linear.len() + self.sectioned.values().map(BTreeMap::len).sum::<usize>()
     }
 
-    /// Gets an image for a specific section and step.
-    ///
-    /// # Arguments
-    /// * `section` - Section number (0 for linear recipes, 1+ for sectioned recipes, one-indexed for sections)
-    /// * `step` - One-indexed step number (1 = first step)
-    ///
-    /// # Returns
-    /// Image path if found, None otherwise
+    /// The image for a step: `section == 0` reads the linear images,
+    /// `section >= 1` the sectioned ones. `step == 0` is always `None`.
     ///
     /// # Examples
     /// ```
     /// # use cooklang_find::StepImageCollection;
     /// # let images = StepImageCollection::default();
-    /// // Get step 3 in linear recipe (Recipe.3.jpg stored at [0][2])
+    /// // Recipe.3.jpg
     /// let img = images.get(0, 3);
-    ///
-    /// // Get section 2, step 4 (Recipe.2.4.jpg stored at [1][3])
+    /// // Recipe.2.4.jpg
     /// let img = images.get(2, 4);
     /// ```
     pub fn get(&self, section: usize, step: usize) -> Option<&String> {
         if step == 0 {
-            return None; // Steps are one-indexed
+            return None;
         }
-        // For section 0 (linear recipes), use section index 0
-        // For section 1+, convert to zero-indexed (section - 1)
-        let section_idx = if section == 0 { 0 } else { section - 1 };
-        self.images.get(&section_idx)?.get(&(step - 1))
+        if section == 0 {
+            self.linear.get(&step)
+        } else {
+            self.sectioned.get(&section)?.get(&step)
+        }
+    }
+
+    /// Builds the collection from a sorted companion scan; the first file
+    /// per slot wins.
+    pub(crate) fn from_companions(companions: &[(Slot, Utf8PathBuf)]) -> Self {
+        let mut collection = StepImageCollection::default();
+        for (slot, path) in companions {
+            match *slot {
+                Slot::Title => {}
+                Slot::Linear(step) => {
+                    collection
+                        .linear
+                        .entry(step)
+                        .or_insert_with(|| path.to_string());
+                }
+                Slot::Sectioned(section, step) => {
+                    collection
+                        .sectioned
+                        .entry(section)
+                        .or_default()
+                        .entry(step)
+                        .or_insert_with(|| path.to_string());
+                }
+            }
+        }
+        collection
     }
 }
 
@@ -126,8 +138,8 @@ pub struct RecipeEntry {
     name: OnceLock<Option<String>>,
     /// Optional path or URL to the title image
     title_image: OnceLock<Option<String>>,
-    /// Cached step and section images
-    step_images: OnceLock<StepImageCollection>,
+    /// Cached title and step images, from one folder listing
+    images: OnceLock<Box<Images>>,
     /// Whether this is a menu file (*.menu) rather than a regular recipe
     is_menu: OnceLock<bool>,
 }
@@ -163,6 +175,15 @@ impl Clone for RecipeEntry {
     }
 }
 
+/// Image lookups, all from one listing of the recipe's folder.
+#[derive(Debug)]
+struct Images {
+    /// Every companion with its slot, sorted; see `companions::scan`.
+    companions: Vec<(Slot, Utf8PathBuf)>,
+    /// One path per step slot, built from `companions`.
+    steps: StepImageCollection,
+}
+
 impl RecipeEntry {
     fn new(source: RecipeSource, metadata: OnceLock<Metadata>) -> Self {
         RecipeEntry {
@@ -170,9 +191,26 @@ impl RecipeEntry {
             metadata,
             name: OnceLock::new(),
             title_image: OnceLock::new(),
-            step_images: OnceLock::new(),
+            images: OnceLock::new(),
             is_menu: OnceLock::new(),
         }
+    }
+
+    /// The image cache, filled on first use; empty for content-based entries.
+    fn images(&self) -> &Images {
+        self.images.get_or_init(|| {
+            let companions = match &self.source {
+                RecipeSource::Path { path } => scan(path),
+                RecipeSource::Content { .. } => Vec::new(),
+            };
+            let steps = StepImageCollection::from_companions(&companions);
+            Box::new(Images { companions, steps })
+        })
+    }
+
+    /// The companion scan, done once.
+    fn companions(&self) -> &[(Slot, Utf8PathBuf)] {
+        &self.images().companions
     }
 
     /// Creates a new `RecipeEntry` from a file path.
@@ -272,7 +310,7 @@ impl RecipeEntry {
     /// 1. Image URL from metadata (image, images, picture, or pictures fields)
     /// 2. Image file with same stem as recipe (for path-based recipes)
     ///
-    /// Supported image extensions: jpg, jpeg, png, webp
+    /// Supported image extensions: jpg, jpeg, png, webp, heic, in any ASCII case.
     ///
     /// The result is cached after the first call.
     pub fn title_image(&self) -> &Option<String> {
@@ -283,10 +321,10 @@ impl RecipeEntry {
             }
 
             // For path-based recipes, check for file-based images
-            match &self.source {
-                RecipeSource::Path { path } => find_title_image(path).map(|p| p.to_string()),
-                RecipeSource::Content { .. } => None,
-            }
+            self.companions()
+                .iter()
+                .find(|(slot, _)| *slot == Slot::Title)
+                .map(|(_, path)| path.to_string())
         })
     }
 
@@ -391,12 +429,12 @@ impl RecipeEntry {
     /// Returns all step and section images for the recipe.
     ///
     /// Images follow the Cooklang naming convention (one-indexed):
-    /// - `RecipeName.N.ext`: Step N in linear recipe (stored at section 0)
+    /// - `RecipeName.N.ext`: Step N in linear recipe (read with section 0)
     /// - `RecipeName.S.N.ext`: Section S, step N within section
     ///
     /// All step and section numbers are one-indexed (first step/section is 1).
     ///
-    /// Supported extensions: jpg, jpeg, png, webp (in priority order)
+    /// Supported extensions: jpg, jpeg, png, webp, heic (in priority order), any ASCII case
     ///
     /// The result is cached after the first call.
     ///
@@ -424,40 +462,46 @@ impl RecipeEntry {
     ///     println!("Section 2, Step 4 image: {}", img);
     /// }
     ///
-    /// // Direct HashMap access for iteration
-    /// if let Some(section_steps) = images.images.get(&1) {
-    ///     for (step_idx, img_path) in section_steps {
-    ///         println!("Section 2, Step {}: {}", step_idx + 1, img_path);
+    /// // Iterate every image
+    /// for (step, img) in &images.linear {
+    ///     println!("Step {step}: {img}");
+    /// }
+    /// for (section, steps) in &images.sectioned {
+    ///     for (step, img) in steps {
+    ///         println!("Section {section}, step {step}: {img}");
     ///     }
     /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn step_images(&self) -> &StepImageCollection {
-        self.step_images.get_or_init(|| match &self.source {
-            RecipeSource::Path { path } => find_step_images(path),
-            RecipeSource::Content { .. } => StepImageCollection::default(),
-        })
+        &self.images().steps
     }
 
-    /// Returns all file paths related to this recipe.
+    /// The title image and every step image next to this recipe; see
+    /// [`companion_files`](crate::companion_files). Empty for content-based
+    /// entries. Never a referenced recipe.
+    pub fn companion_files(&self) -> Vec<Utf8PathBuf> {
+        self.companions()
+            .iter()
+            .map(|(_, path)| path.clone())
+            .collect()
+    }
+
+    /// Every file this recipe depends on: its companion files (title and
+    /// step images, every extension variant), the recipes and menus it
+    /// references, and, recursively, theirs.
     ///
-    /// Includes:
-    /// - Title image (if any)
-    /// - Step/section images
-    /// - Referenced recipe .cook files (detected via `@./path` or `@../path` syntax)
-    /// - Recursively: related files of referenced recipes
-    ///
-    /// Returns an empty Vec for content-based recipes.
-    /// Missing referenced files are silently skipped.
-    /// Cycles are detected and broken automatically.
-    pub fn related_files(&self) -> Vec<Utf8PathBuf> {
-        let path = match &self.source {
-            RecipeSource::Path { path } => path,
-            RecipeSource::Content { .. } => return Vec::new(),
+    /// References resolve against `base_dir`, the collection root, with
+    /// [`resolve_reference`](crate::resolve_reference). References inside
+    /// frontmatter or comments are ignored. Missing references are skipped;
+    /// cycles are broken. Empty for content-based entries.
+    pub fn related_files(&self, base_dir: &Utf8Path) -> Vec<Utf8PathBuf> {
+        let RecipeSource::Path { path } = &self.source else {
+            return Vec::new();
         };
         let mut visited = HashSet::new();
         let mut result = Vec::new();
-        collect_related_files(path, &mut visited, &mut result);
+        collect_related_files(base_dir, path, &mut visited, &mut result);
         result
     }
 }
@@ -486,213 +530,48 @@ fn read_metadata(path: &Utf8Path) -> Result<Metadata, RecipeEntryError> {
     )
 }
 
-fn find_title_image(path: &Utf8Path) -> Option<Utf8PathBuf> {
-    // Look for an image with the same stem
-    let possible_image_extensions = ["jpg", "jpeg", "png", "webp"];
-    possible_image_extensions.iter().find_map(|ext| {
-        let image_path = path.with_extension(ext);
-        if image_path.exists() {
-            Some(image_path)
-        } else {
-            None
-        }
-    })
-}
-
-/// Discovers all step and section images for a recipe file.
-///
-/// Uses glob patterns to find images matching these patterns:
-/// - `Recipe.N.ext` (where N is 1+, one-indexed) → stored at [0][N-1]
-/// - `Recipe.S.N.ext` (where S and N are 1+, one-indexed) → stored at [S-1][N-1]
-///
-/// Images are discovered purely by filename pattern. No recipe parsing required.
-///
-/// # Arguments
-///
-/// * `path` - Path to the recipe file
-///
-/// # Returns
-///
-/// StepImageCollection containing all discovered images
-fn find_step_images(path: &Utf8Path) -> StepImageCollection {
-    let mut collection = StepImageCollection::default();
-    let stem = match path.file_stem() {
-        Some(s) => s,
-        None => return collection,
-    };
-    let dir = path.parent().unwrap_or(path);
-    let extensions = ["jpg", "jpeg", "png", "webp"];
-
-    // Build glob pattern for images: Recipe.*.ext and Recipe.*.*.ext
-    // Pattern matches: Recipe.1.jpg, Recipe.2.4.png, etc.
-    for ext in &extensions {
-        let pattern = dir.join(format!("{}.*.{}", stem, ext));
-        let pattern_str = pattern.as_str();
-
-        if let Ok(entries) = glob(pattern_str) {
-            for entry in entries.flatten() {
-                if let Some(numbers) = parse_image_numbers(&entry, stem, ext) {
-                    let entry_str = entry.to_string_lossy().to_string();
-
-                    match numbers.len() {
-                        // Single number: Recipe.N.ext
-                        1 => {
-                            let step_num = numbers[0]; // One-indexed from filename
-                                                       // Store in section 0 for linear recipes
-                                                       // Recipe.1.ext -> [0][0], Recipe.3.ext -> [0][2]
-                            collection
-                                .images
-                                .entry(0)
-                                .or_insert_with(HashMap::new)
-                                .entry(step_num - 1) // Convert to zero-indexed
-                                .or_insert(entry_str);
-                        }
-                        // Two numbers: Recipe.S.N.ext
-                        2 => {
-                            let (section_num, step_num) = (numbers[0], numbers[1]); // One-indexed
-                                                                                    // Recipe.2.4.ext -> [1][3]
-                            collection
-                                .images
-                                .entry(section_num - 1) // Convert to zero-indexed
-                                .or_insert_with(HashMap::new)
-                                .entry(step_num - 1) // Convert to zero-indexed
-                                .or_insert(entry_str);
-                        }
-                        _ => {} // Ignore invalid patterns
-                    }
-                }
-            }
-        }
-    }
-
-    collection
-}
-
-/// Parses step/section numbers from an image filename.
-///
-/// Examples:
-/// - "Recipe.3.jpg" -> Some(vec![3])
-/// - "Recipe.2.4.jpg" -> Some(vec![2, 4])
-/// - "Recipe.invalid.jpg" -> None
-///
-/// # Arguments
-///
-/// * `path` - Path to the image file
-/// * `stem` - Recipe file stem (e.g., "Recipe")
-/// * `ext` - Image extension (e.g., "jpg")
-///
-/// # Returns
-///
-/// Vector of one-indexed numbers if valid, None otherwise
-fn parse_image_numbers(path: &Path, stem: &str, ext: &str) -> Option<Vec<usize>> {
-    let filename = path.file_name()?.to_str()?;
-
-    // Remove the stem and extension to get just the number part(s)
-    // Example: "Recipe.2.4.jpg" -> ".2.4."
-    let without_stem = filename.strip_prefix(stem)?;
-    let without_ext = without_stem.strip_suffix(&format!(".{}", ext))?;
-
-    // Split by dots and parse numbers
-    // Example: ".2.4." -> ["", "2", "4", ""]
-    let numbers: Vec<usize> = without_ext
-        .split('.')
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| s.parse::<usize>().ok())
-        .collect();
-
-    // Only accept 1 or 2 numbers, and they must be >= 1 (one-indexed)
-    if !numbers.is_empty() && numbers.len() <= 2 && numbers.iter().all(|&n| n >= 1) {
-        Some(numbers)
-    } else {
-        None
+/// Canonical form for the visited set, or the path itself when it cannot
+/// be canonicalised.
+fn canonical(path: &Utf8Path) -> Utf8PathBuf {
+    match std::fs::canonicalize(path) {
+        Ok(p) => Utf8PathBuf::from_path_buf(p)
+            .unwrap_or_else(|p| Utf8PathBuf::from(p.to_string_lossy().into_owned())),
+        Err(_) => path.to_path_buf(),
     }
 }
 
-/// Extracts recipe references from Cooklang content.
-///
-/// Looks for ingredient references that are relative file paths,
-/// matching patterns like `@./path/to/Recipe` or `@../path/to/Recipe`
-/// with optional quantity `{...}`.
-///
-/// Returns deduplicated list of referenced paths (without extension).
-fn extract_recipe_references(content: &str) -> Vec<String> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"@(\.\.?/[^\s\{},.)]+)").unwrap());
-    let mut seen = HashSet::new();
-    let mut refs = Vec::new();
-    for cap in re.captures_iter(content) {
-        let path = cap[1].to_string();
-        if seen.insert(path.clone()) {
-            refs.push(path);
-        }
-    }
-    refs
-}
-
-/// Recursively collects all files related to a recipe.
-///
-/// Adds image paths and referenced recipe paths to `result`.
-/// Uses `visited` to prevent cycles and deduplication.
+/// Recursively collects the files related to `recipe_path`: companions,
+/// then each resolved reference and its own related files.
 fn collect_related_files(
+    base_dir: &Utf8Path,
     recipe_path: &Utf8Path,
     visited: &mut HashSet<Utf8PathBuf>,
     result: &mut Vec<Utf8PathBuf>,
 ) {
-    // Canonicalize and mark as visited to prevent cycles
-    let canonical = match std::fs::canonicalize(recipe_path) {
-        Ok(p) => Utf8PathBuf::from_path_buf(p)
-            .unwrap_or_else(|p| Utf8PathBuf::from(p.to_string_lossy().into_owned())),
-        Err(_) => recipe_path.to_path_buf(),
-    };
-    if !visited.insert(canonical) {
+    if !visited.insert(canonical(recipe_path)) {
         return;
     }
-
-    // Collect title image
-    if let Some(image_path) = find_title_image(recipe_path) {
-        result.push(image_path);
-    }
-
-    // Collect step images
-    let step_images = find_step_images(recipe_path);
-    for steps in step_images.images.values() {
-        for image_path in steps.values() {
-            result.push(Utf8PathBuf::from(image_path));
+    for (_, companion) in scan(recipe_path) {
+        if !result.contains(&companion) {
+            result.push(companion);
         }
     }
 
-    // Read content and extract recipe references. Decoded lossily, so a recipe
-    // with a stray non-UTF-8 byte still has its references followed.
-    let content = match File::open(recipe_path)
-        .and_then(|file| read_to_string_lossy(&mut BufReader::new(file)))
-    {
-        Ok(c) => c,
-        Err(_) => return,
+    // Decoded lossily, so a stray non-UTF-8 byte does not hide references.
+    let Ok(content) =
+        File::open(recipe_path).and_then(|file| read_to_string_lossy(&mut BufReader::new(file)))
+    else {
+        return;
     };
-
-    let dir = recipe_path.parent().unwrap_or(recipe_path);
-    for ref_path_str in extract_recipe_references(&content) {
-        // Resolve relative to recipe's directory
-        let ref_path = dir.join(&ref_path_str);
-
-        // Try with .cook extension if no extension present
-        let candidates = if ref_path.extension().is_some() {
-            vec![ref_path]
-        } else {
-            vec![ref_path.with_extension("cook")]
+    for reference in extract_references(&content) {
+        let Some(file) = resolve_reference(base_dir, &reference) else {
+            continue;
         };
-
-        for candidate in candidates {
-            let canonical_candidate = match std::fs::canonicalize(&candidate) {
-                Ok(p) => Utf8PathBuf::from_path_buf(p)
-                    .unwrap_or_else(|p| Utf8PathBuf::from(p.to_string_lossy().into_owned())),
-                Err(_) => candidate.clone(),
-            };
-            if candidate.exists() && !visited.contains(&canonical_candidate) {
-                result.push(candidate.clone());
-                collect_related_files(&candidate, visited, result);
-            }
+        if visited.contains(&canonical(&file)) {
+            continue;
         }
+        result.push(file.clone());
+        collect_related_files(base_dir, &file, visited, result);
     }
 }
 
@@ -893,7 +772,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
         let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", "Test content");
-        assert!(find_title_image(&recipe_path).is_none());
+        assert!(RecipeEntry::from_path(recipe_path.clone())
+            .unwrap()
+            .title_image()
+            .is_none());
     }
 
     #[test]
@@ -903,17 +785,20 @@ mod tests {
         let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", "Test content");
 
         // Test each supported extension
-        for ext in ["jpg", "jpeg", "png", "webp"] {
+        for ext in ["jpg", "jpeg", "png", "webp", "heic"] {
             // Clean up any previous test images
-            for old_ext in ["jpg", "jpeg", "png", "webp"] {
+            for old_ext in ["jpg", "jpeg", "png", "webp", "heic"] {
                 let _ = std::fs::remove_file(recipe_path.with_extension(old_ext));
             }
 
             let image_path = create_test_image(&temp_dir_path, "test_recipe", ext);
-            let found = find_title_image(&recipe_path);
+            let found = RecipeEntry::from_path(recipe_path.clone())
+                .unwrap()
+                .title_image()
+                .clone();
 
             assert!(found.is_some(), "Failed to find image with extension {ext}");
-            assert_eq!(found.unwrap(), image_path);
+            assert_eq!(found, Some(image_path.to_string()));
         }
     }
 
@@ -929,9 +814,11 @@ mod tests {
         let _webp_path = create_test_image(&temp_dir_path, "test_recipe", "webp");
 
         // Should return the first matching extension (jpg)
-        let found_image = find_title_image(&recipe_path);
-        assert!(found_image.is_some());
-        assert_eq!(found_image.unwrap(), jpg_path);
+        let found_image = RecipeEntry::from_path(recipe_path.clone())
+            .unwrap()
+            .title_image()
+            .clone();
+        assert_eq!(found_image, Some(jpg_path.to_string()));
     }
 
     #[test]
@@ -1053,7 +940,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_find_title_image_case_sensitivity() {
         let temp_dir = TempDir::new().unwrap();
         let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
@@ -1062,10 +948,15 @@ mod tests {
         // Create an image with uppercase extension
         let image_path = temp_dir_path.join("test_recipe.JPG");
         File::create(&image_path).unwrap();
-        let found_image = find_title_image(&recipe_path);
+        let found_image = RecipeEntry::from_path(recipe_path.clone())
+            .unwrap()
+            .title_image()
+            .clone();
 
         // Should find the image with uppercase extension
-        assert!(found_image.is_some());
+        assert!(found_image
+            .as_deref()
+            .is_some_and(|p| p.ends_with("test_recipe.JPG")));
     }
 
     // ========== Tests for StepImageCollection ==========
@@ -1081,11 +972,7 @@ mod tests {
     #[test]
     fn test_step_image_collection_get_zero_step() {
         let mut collection = StepImageCollection::default();
-        collection
-            .images
-            .entry(0)
-            .or_insert_with(HashMap::new)
-            .insert(0, "test.jpg".to_string());
+        collection.linear.insert(1, "test.jpg".to_string());
 
         // Step 0 should return None (steps are one-indexed)
         assert_eq!(collection.get(0, 0), None);
@@ -1108,11 +995,11 @@ mod tests {
         assert!(!images.is_empty());
         assert_eq!(images.count(), 3);
 
-        // Verify images are stored at correct indices (one-indexed access, zero-indexed storage)
-        assert!(images.get(0, 1).is_some()); // Recipe.1.jpg at [0][0]
+        // `get(0, n)` is the linear step image `Recipe.n.jpg`.
+        assert!(images.get(0, 1).is_some()); // Recipe.1.jpg
         assert!(images.get(0, 2).is_none()); // No Recipe.2.jpg
-        assert!(images.get(0, 3).is_some()); // Recipe.3.jpg at [0][2]
-        assert!(images.get(0, 5).is_some()); // Recipe.5.jpg at [0][4]
+        assert!(images.get(0, 3).is_some()); // Recipe.3.jpg
+        assert!(images.get(0, 5).is_some()); // Recipe.5.jpg
 
         // Verify actual paths
         let img1 = images.get(0, 1).unwrap();
@@ -1135,12 +1022,12 @@ mod tests {
         assert!(!images.is_empty());
         assert_eq!(images.count(), 2);
 
-        // Recipe.2.4.jpg should be at section 2, step 4 (stored at [1][3])
+        // `get(2, 4)` → `Recipe.2.4.jpg`
         assert!(images.get(2, 4).is_some());
         let img = images.get(2, 4).unwrap();
         assert!(img.contains("test_recipe.2.4.jpg"));
 
-        // Recipe.1.1.jpg should be at section 1, step 1 (stored at [0][0])
+        // `get(1, 1)` → `Recipe.1.1.jpg`
         assert!(images.get(1, 1).is_some());
         let img = images.get(1, 1).unwrap();
         assert!(img.contains("test_recipe.1.1.jpg"));
@@ -1166,10 +1053,10 @@ mod tests {
         let images = recipe.step_images();
         assert_eq!(images.count(), 2);
 
-        // Recipe.2.jpg is stored at [0][1] (section 0 = linear)
+        // `get(0, 2)` → `Recipe.2.jpg` (section 0 is the linear step list)
         assert!(images.get(0, 2).is_some());
 
-        // Recipe.2.4.jpg is stored at [1][3] (section 2, step 4)
+        // `get(2, 4)` → `Recipe.2.4.jpg`
         assert!(images.get(2, 4).is_some());
     }
 
@@ -1267,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn test_direct_hashmap_iteration() {
+    fn test_linear_images_iterate_by_step() {
         let temp_dir = TempDir::new().unwrap();
         let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
         let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", "Test content");
@@ -1278,88 +1165,42 @@ mod tests {
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
         let images = recipe.step_images();
 
-        // Test direct HashMap access
-        if let Some(section_steps) = images.images.get(&0) {
-            assert_eq!(section_steps.len(), 2);
-            assert!(section_steps.contains_key(&0)); // Recipe.1.jpg
-            assert!(section_steps.contains_key(&1)); // Recipe.2.jpg
-        } else {
-            panic!("Section 0 should exist");
-        }
+        assert_eq!(
+            images.linear.keys().copied().collect::<Vec<_>>(),
+            vec![1, 2]
+        );
     }
 
     #[test]
-    fn test_parse_image_numbers_valid() {
-        use std::path::PathBuf;
+    fn test_linear_and_section_one_images_do_not_collide() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let recipe_path = create_test_recipe(&temp_dir_path, "test_recipe", "Test content");
+        let linear = create_test_image(&temp_dir_path, "test_recipe.2", "jpg");
+        let sectioned = create_test_image(&temp_dir_path, "test_recipe.1.2", "jpg");
 
-        // Test single number
-        let path = PathBuf::from("Recipe.3.jpg");
-        let result = parse_image_numbers(&path, "Recipe", "jpg");
-        assert_eq!(result, Some(vec![3]));
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        let images = recipe.step_images();
 
-        // Test two numbers
-        let path = PathBuf::from("Recipe.2.4.jpg");
-        let result = parse_image_numbers(&path, "Recipe", "jpg");
-        assert_eq!(result, Some(vec![2, 4]));
+        assert_eq!(images.count(), 2);
+        assert_eq!(images.get(0, 2), Some(&linear.to_string()));
+        assert_eq!(images.get(1, 2), Some(&sectioned.to_string()));
     }
 
     #[test]
-    fn test_parse_image_numbers_invalid() {
-        use std::path::PathBuf;
+    fn test_companion_files_on_entry() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let recipe_path = create_test_recipe(&temp_dir_path, "pasta", "Make @./Pesto{}");
+        create_test_recipe(&temp_dir_path, "Pesto", "Blend");
+        let title = create_test_image(&temp_dir_path, "pasta", "jpg");
+        let step = create_test_image(&temp_dir_path, "pasta.1", "heic");
 
-        // Invalid: zero
-        let path = PathBuf::from("Recipe.0.jpg");
-        let result = parse_image_numbers(&path, "Recipe", "jpg");
-        assert_eq!(result, None);
+        let recipe = RecipeEntry::from_path(recipe_path).unwrap();
+        assert_eq!(recipe.companion_files(), vec![title, step]);
 
-        // Invalid: non-numeric
-        let path = PathBuf::from("Recipe.invalid.jpg");
-        let result = parse_image_numbers(&path, "Recipe", "jpg");
-        assert_eq!(result, None);
-
-        // Invalid: three numbers
-        let path = PathBuf::from("Recipe.1.2.3.jpg");
-        let result = parse_image_numbers(&path, "Recipe", "jpg");
-        assert_eq!(result, None);
-    }
-
-    // ========== Tests for extract_recipe_references ==========
-
-    #[test]
-    fn test_extract_recipe_references_simple() {
-        let content = "Pour @./sauces/Hollandaise{150%g} over the eggs.";
-        let refs = extract_recipe_references(content);
-        assert_eq!(refs, vec!["./sauces/Hollandaise"]);
-    }
-
-    #[test]
-    fn test_extract_recipe_references_multiple() {
-        let content = "Serve @./sauces/Hollandaise{150%g} with @./sides/Asparagus{200%g}.";
-        let refs = extract_recipe_references(content);
-        assert_eq!(refs.len(), 2);
-        assert!(refs.contains(&"./sauces/Hollandaise".to_string()));
-        assert!(refs.contains(&"./sides/Asparagus".to_string()));
-    }
-
-    #[test]
-    fn test_extract_recipe_references_no_refs() {
-        let content = "Add @salt{1%tsp} and @pepper{1%tsp}.";
-        let refs = extract_recipe_references(content);
-        assert!(refs.is_empty());
-    }
-
-    #[test]
-    fn test_extract_recipe_references_no_quantity() {
-        let content = "Serve with @./sauces/Hollandaise over eggs.";
-        let refs = extract_recipe_references(content);
-        assert_eq!(refs, vec!["./sauces/Hollandaise"]);
-    }
-
-    #[test]
-    fn test_extract_recipe_references_deduplicates() {
-        let content = "Use @./base/Stock{100%ml} twice and @./base/Stock{200%ml} again.";
-        let refs = extract_recipe_references(content);
-        assert_eq!(refs, vec!["./base/Stock"]);
+        let content = RecipeEntry::from_content("Make".to_string(), None).unwrap();
+        assert!(content.companion_files().is_empty());
     }
 
     // ========== Tests for related_files ==========
@@ -1371,7 +1212,7 @@ mod tests {
         let recipe_path = create_test_recipe(&temp_dir_path, "simple", "Just a recipe");
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
         assert!(files.is_empty());
     }
 
@@ -1383,7 +1224,7 @@ mod tests {
         let image_path = create_test_image(&temp_dir_path, "pasta", "jpg");
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0], image_path);
     }
@@ -1397,14 +1238,14 @@ mod tests {
         create_test_image(&temp_dir_path, "pasta.2", "jpg");
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
         assert_eq!(files.len(), 2);
     }
 
     #[test]
     fn test_related_files_content_based_returns_empty() {
         let recipe = RecipeEntry::from_content("Just content".to_string(), None).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(Utf8Path::new("/nowhere"));
         assert!(files.is_empty());
     }
 
@@ -1429,7 +1270,7 @@ mod tests {
         );
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
 
         // Should include: sauces/Hollandaise.cook + sauces/Hollandaise.jpg
         assert_eq!(files.len(), 2);
@@ -1460,7 +1301,7 @@ mod tests {
         create_test_recipe(
             &sauces_dir,
             "Gravy",
-            "Add @../base/Stock{200%ml} and thicken.",
+            "Add @./base/Stock{200%ml} and thicken.",
         );
 
         // Main recipe -> references sauces/Gravy
@@ -1471,7 +1312,7 @@ mod tests {
         );
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
 
         // Should include:
         // - sauces/Gravy.cook (direct reference)
@@ -1498,7 +1339,7 @@ mod tests {
 
         let recipe_path = temp_dir_path.join("RecipeA.cook");
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
 
         // Should include RecipeB.cook but not loop infinitely
         assert_eq!(files.len(), 1);
@@ -1517,24 +1358,75 @@ mod tests {
         );
 
         let recipe = RecipeEntry::from_path(recipe_path).unwrap();
-        let files = recipe.related_files();
+        let files = recipe.related_files(&temp_dir_path);
 
         // Missing references are silently skipped
         assert!(files.is_empty());
     }
 
     #[test]
-    fn test_extract_recipe_references_parent_dir() {
-        let content = "Add @../base/Stock{200%ml} and thicken.";
-        let refs = extract_recipe_references(content);
-        assert_eq!(refs, vec!["../base/Stock"]);
+    fn test_related_files_resolve_from_base_dir_not_recipe_folder() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let sub = temp_dir_path.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        let root_b = create_test_recipe(&temp_dir_path, "B", "Root B");
+        create_test_recipe(&sub, "B", "Sub B");
+        let a = create_test_recipe(&sub, "A", "Use @./B{} here.");
+
+        let recipe = RecipeEntry::from_path(a).unwrap();
+        assert_eq!(recipe.related_files(&temp_dir_path), vec![root_b]);
     }
 
     #[test]
-    fn test_extract_recipe_references_trailing_punctuation() {
-        let content = "Serve @./sauces/Hollandaise.";
-        let refs = extract_recipe_references(content);
-        assert_eq!(refs, vec!["./sauces/Hollandaise"]);
+    fn test_related_files_follows_menu_references_and_spaces() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let menu = temp_dir_path.join("Sunday.menu");
+        std::fs::write(&menu, "= Day\n- @./Pesto Sauce{}\n").unwrap();
+        let pesto = create_test_recipe(&temp_dir_path, "Pesto Sauce", "Blend");
+        let plan = create_test_recipe(
+            &temp_dir_path,
+            "Plan",
+            "See @./Sunday{} for @./Pesto Sauce{2}.",
+        );
+
+        let recipe = RecipeEntry::from_path(plan).unwrap();
+        assert_eq!(recipe.related_files(&temp_dir_path), vec![menu, pesto]);
+    }
+
+    #[test]
+    fn test_related_files_ignore_commented_out_references() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        create_test_recipe(&temp_dir_path, "Hidden", "x");
+        let shown = create_test_recipe(&temp_dir_path, "Shown", "y");
+        let plan = create_test_recipe(
+            &temp_dir_path,
+            "Plan",
+            "---\nsource: @./Hidden\n---\n[- @./Hidden{} -] @./Shown{} -- @./Hidden{}",
+        );
+
+        let recipe = RecipeEntry::from_path(plan).unwrap();
+        assert_eq!(recipe.related_files(&temp_dir_path), vec![shown]);
+    }
+
+    #[test]
+    fn test_related_files_lists_shared_companions_once() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_dir_path = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        let cook = create_test_recipe(&temp_dir_path, "Pancakes", "Flip");
+        let menu = temp_dir_path.join("Pancakes.menu");
+        std::fs::write(&menu, "= Day\n- @./Pancakes{}\n").unwrap();
+        let image = create_test_image(&temp_dir_path, "Pancakes", "jpg");
+        let plan = create_test_recipe(&temp_dir_path, "Plan", "@./Pancakes{} @./Pancakes.menu{}");
+
+        let recipe = RecipeEntry::from_path(plan).unwrap();
+        assert_eq!(
+            recipe.related_files(&temp_dir_path),
+            vec![cook, image, menu]
+        );
     }
 
     fn temp_dir() -> (TempDir, Utf8PathBuf) {

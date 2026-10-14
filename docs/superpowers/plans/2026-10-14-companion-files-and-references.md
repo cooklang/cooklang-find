@@ -246,8 +246,8 @@ Expected: all pass, including `unbraced_recipe_reference`, `unbraced_ingredient_
 
 - [ ] **Step 6: Lint and commit**
 
-Run: `make lint`
-Expected: no output from fmt, no clippy warnings.
+Run: `cargo fmt && make lint`
+Expected: clean (`cargo fmt` first, because several snippets here are not rustfmt-clean as pasted).
 
 ```bash
 git add src/reference.rs src/lib.rs src/menu/parse.rs
@@ -332,6 +332,7 @@ use std::collections::HashSet;
 ///
 /// Scans line by line with [`component`], so a name never spans lines, and
 /// stops a line at `--` (a comment).
+#[allow(dead_code)] // wired into related_files in a later commit
 pub(crate) fn extract_references(content: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut refs = Vec::new();
@@ -363,7 +364,10 @@ pub(crate) fn extract_references(content: &str) -> Vec<String> {
 Run: `cargo test --lib reference::`
 Expected: 13 passed.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Lint and commit**
+
+Run: `cargo fmt && make lint`
+Expected: clean. The `#[allow(dead_code)]` is what keeps `-D warnings` quiet until Task 5 Step 6 uses the function; that step removes the attribute.
 
 ```bash
 git add src/reference.rs
@@ -480,10 +484,12 @@ use camino::{Utf8Path, Utf8PathBuf};
 /// Segments `.` and empty are dropped and `..` pops the previous segment;
 /// a reference that would leave the root is `None`. A last segment ending
 /// in `.cook` or `.menu` (any ASCII case) is tried as written first; then,
-/// for every reference, `<path>.cook` and `<path>.menu` are tried, so
-/// `./Dr.Cook` still finds `Dr.Cook.cook`. The first existing regular file
-/// wins; `None` otherwise. Symlinks are not followed for the containment
-/// check.
+/// for every reference, `<name>.cook` and `<name>.menu` are tried, so
+/// `./Dr.Cook` still finds `Dr.Cook.cook`. The folder is listed once and
+/// the extension is compared ignoring ASCII case, so `./Pesto` finds
+/// `Pesto.COOK` on any filesystem; the stem must match exactly. The first
+/// existing regular file wins, in its real spelling; `None` otherwise.
+/// Symlinks are not followed for the containment check.
 ///
 /// This is the one rule for references, used by `RecipeEntry::related_files`
 /// and `Menu::resolve_scales`, and the same rule CookCLI applies.
@@ -498,20 +504,46 @@ pub fn resolve_reference(base_dir: &Utf8Path, reference: &str) -> Option<Utf8Pat
             name => segments.push(name),
         }
     }
-    if segments.is_empty() {
-        return None;
-    }
-    let path = base_dir.join(segments.join("/"));
+    let name = segments.pop()?;
+    let dir = segments
+        .iter()
+        .fold(base_dir.to_path_buf(), |dir, segment| dir.join(segment));
 
-    let mut candidates = Vec::with_capacity(3);
-    if has_extension(&path, "cook") || has_extension(&path, "menu") {
-        candidates.push(path.clone());
+    let mut wanted = Vec::with_capacity(3);
+    let as_path = Utf8Path::new(name);
+    if has_extension(as_path, "cook") || has_extension(as_path, "menu") {
+        wanted.push(name.to_string());
     }
-    candidates.push(Utf8PathBuf::from(format!("{path}.cook")));
-    candidates.push(Utf8PathBuf::from(format!("{path}.menu")));
-    candidates.into_iter().find(|candidate| candidate.is_file())
+    wanted.push(format!("{name}.cook"));
+    wanted.push(format!("{name}.menu"));
+
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    names.sort();
+    wanted.iter().find_map(|want| {
+        names
+            .iter()
+            .find(|have| same_file_name(have, want))
+            .map(|have| dir.join(have))
+            .filter(|path| path.is_file())
+    })
+}
+
+/// Same stem, and the same extension ignoring ASCII case.
+fn same_file_name(have: &str, want: &str) -> bool {
+    match (have.rsplit_once('.'), want.rsplit_once('.')) {
+        (Some((have_stem, have_ext)), Some((want_stem, want_ext))) => {
+            have_stem == want_stem && have_ext.eq_ignore_ascii_case(want_ext)
+        }
+        _ => have == want,
+    }
 }
 ```
+
+The imports at the top of the file become `use camino::{Utf8Path, Utf8PathBuf}; use std::collections::HashSet; use std::fs;` plus `use crate::walk::has_extension;` (the test module already imports `fs`, `Utf8Path`, `Utf8PathBuf` and `TempDir` on its own).
 
 - [ ] **Step 4: Re-export from the crate root**
 
@@ -546,7 +578,7 @@ with:
 
 - [ ] **Step 7: Lint and commit**
 
-Run: `make lint`
+Run: `cargo fmt && make lint`
 
 ```bash
 git add src/reference.rs src/lib.rs docs/superpowers/specs/2026-10-14-companion-files-and-references-design.md
@@ -784,7 +816,7 @@ Expected: 6 passed (the `.Pasta.jpg` hidden file and `Pasta.gif` are skipped; `P
 
 - [ ] **Step 4: Lint and commit**
 
-Run: `make lint`
+Run: `cargo fmt && make lint`
 
 ```bash
 git add src/model/companions.rs src/model/mod.rs
@@ -800,7 +832,7 @@ git commit -m "feat: companion_files lists a recipe's images in one folder scan"
 
 - [ ] **Step 1: Replace `StepImageCollection`**
 
-Replace lines 16-80 (the doc comment, struct and impl) with:
+Replace lines 16-76 (the doc comment, struct and impl; line 78 starts `RecipeSource`'s doc) with:
 
 ```rust
 /// A recipe's step and section images, by one-based step number.
@@ -902,6 +934,25 @@ use thiserror::Error;
 
 - [ ] **Step 3: Cache the scan on the entry**
 
+`RecipeEntry` sits inside `tree::DirEntry::Recipe`, and clippy's
+`large_enum_variant` fires if the struct grows by more than a few bytes
+(the reviewer measured 272 bytes against `Folder`'s 56 with two separate
+caches). So the scan and the step images share one boxed cache, which
+makes the struct smaller than today, not larger.
+
+Above `impl RecipeEntry`, add:
+
+```rust
+/// Image lookups, all from one listing of the recipe's folder.
+#[derive(Debug)]
+struct Images {
+    /// Every companion with its slot, sorted; see `companions::scan`.
+    companions: Vec<(Slot, Utf8PathBuf)>,
+    /// One path per step slot, built from `companions`.
+    steps: StepImageCollection,
+}
+```
+
 In the `RecipeEntry` struct, replace
 
 ```rust
@@ -912,23 +963,30 @@ In the `RecipeEntry` struct, replace
 with
 
 ```rust
-    /// Cached companion scan (title and step images), one folder listing
-    companions: OnceLock<Vec<(Slot, Utf8PathBuf)>>,
-    /// Cached step and section images, built from `companions`
-    step_images: OnceLock<StepImageCollection>,
+    /// Cached title and step images, from one folder listing
+    images: OnceLock<Box<Images>>,
 ```
 
-and in `RecipeEntry::new` add `companions: OnceLock::new(),` next to `step_images: OnceLock::new(),`.
+and in `RecipeEntry::new` replace `step_images: OnceLock::new(),` with `images: OnceLock::new(),`.
 
-Add a private accessor right after `fn new`:
+Add two private accessors right after `fn new`:
 
 ```rust
-    /// The companion scan, done once; empty for content-based entries.
-    fn companions(&self) -> &[(Slot, Utf8PathBuf)] {
-        self.companions.get_or_init(|| match &self.source {
-            RecipeSource::Path { path } => scan(path),
-            RecipeSource::Content { .. } => Vec::new(),
+    /// The image cache, filled on first use; empty for content-based entries.
+    fn images(&self) -> &Images {
+        self.images.get_or_init(|| {
+            let companions = match &self.source {
+                RecipeSource::Path { path } => scan(path),
+                RecipeSource::Content { .. } => Vec::new(),
+            };
+            let steps = StepImageCollection::from_companions(&companions);
+            Box::new(Images { companions, steps })
         })
+    }
+
+    /// The companion scan, done once.
+    fn companions(&self) -> &[(Slot, Utf8PathBuf)] {
+        &self.images().companions
     }
 ```
 
@@ -948,8 +1006,7 @@ and update its doc line to `/// Supported image extensions: jpg, jpeg, png, webp
 In `step_images`, replace the body with:
 
 ```rust
-        self.step_images
-            .get_or_init(|| StepImageCollection::from_companions(self.companions()))
+        &self.images().steps
 ```
 
 and replace the doc example's "Direct HashMap access" block with:
@@ -1001,11 +1058,13 @@ fn extract_recipe_references(content: &str) -> Vec<String> {
 }
 ```
 
+Now that it has a caller, remove the `#[allow(dead_code)]` line above `extract_references` in `src/reference.rs`.
+
 - [ ] **Step 7: Update the tests in `recipe_entry.rs`**
 
-- `test_find_title_image_*` (4 tests around lines 892-960 and 1057): they call `find_title_image(&recipe_path)`. Replace each call with `RecipeEntry::from_path(recipe_path.clone()).unwrap().title_image().clone()` and compare as strings; for `test_find_title_image_case_sensitivity`, assert the found path ends with `test_recipe.JPG` (it now passes on Linux too, which is the point).
+- `test_find_title_image_*` (4 tests around lines 892-960 and 1057): they call `find_title_image(&recipe_path)`. Replace each call with `RecipeEntry::from_path(recipe_path.clone()).unwrap().title_image().clone()` and compare as strings; for `test_find_title_image_case_sensitivity`, remove its `#[ignore]` attribute and assert the found path ends with `test_recipe.JPG` (it now passes on Linux too, which is the point).
 - `test_step_image_collection_get_zero_step`: build the collection with `collection.linear.insert(1, "test.jpg".to_string());`.
-- `test_recipe_step_images_with_gaps` (line ~1282): replace the `images.images.get(&0)` block with `assert_eq!(images.linear.keys().copied().collect::<Vec<_>>(), vec![1, 2]);`.
+- `test_direct_hashmap_iteration` (line ~1282, the one with `images.images.get(&0)`): replace that block with `assert_eq!(images.linear.keys().copied().collect::<Vec<_>>(), vec![1, 2]);` and rename the test `test_linear_images_iterate_by_step`. `test_recipe_step_images_with_gaps` needs no change.
 - `test_recipe_with_section_step_images` (line 1123): keep; it asserts `get(2, 4)` and `get(1, 1)`, which the new storage answers correctly.
 - Delete `test_parse_image_numbers_valid` and `test_parse_image_numbers_invalid`; `classify` is tested in `companions.rs`.
 - Delete the seven `test_extract_recipe_references_*` tests; `reference.rs` covers them.
@@ -1115,7 +1174,7 @@ Expected: all pass. (`related_files` tests still pass at this point because `col
 
 - [ ] **Step 11: Lint and commit**
 
-Run: `make lint`
+Run: `cargo fmt && make lint`
 Expected: clean. If clippy flags the now-unused `Path` import or similar, remove it.
 
 ```bash
@@ -1248,7 +1307,7 @@ Expected: 9 passed.
 
 - [ ] **Step 6: Lint and commit**
 
-Run: `make lint`
+Run: `cargo fmt && make lint`
 
 ```bash
 git add src/model/companions.rs src/model/mod.rs
@@ -1264,7 +1323,7 @@ git commit -m "feat: renamed_companions plans the companion moves for a recipe r
 
 - [ ] **Step 1: Update the existing tests to the new signature and rule**
 
-Every `recipe.related_files()` in the tests becomes `recipe.related_files(&temp_dir_path)`.
+Every `recipe.related_files()` in the tests becomes `recipe.related_files(&temp_dir_path)`, except `test_related_files_content_based_returns_empty`, which has no temp dir: use `recipe.related_files(Utf8Path::new("/nowhere"))` there.
 
 In `test_related_files_recursive`, the Gravy recipe must reference Stock from the root:
 
@@ -1407,7 +1466,7 @@ In `test_related_files_ffi`, change the call to `recipe.related_files(temp_path.
 
 - [ ] **Step 6: Run everything, lint, commit**
 
-Run: `cargo test` then `make lint`
+Run: `cargo test`, then `cargo fmt && make lint`
 Expected: all pass, lint clean.
 
 ```bash
@@ -1486,7 +1545,7 @@ Expected: all pass, including `dotted_reference_name_is_not_an_extension`, `expl
 
 - [ ] **Step 5: Lint and commit**
 
-Run: `make lint`
+Run: `cargo fmt && make lint`
 
 ```bash
 git add src/menu/scale.rs
@@ -1660,16 +1719,16 @@ pub fn resolve_reference(base_dir: String, reference: String) -> Option<String> 
 - [ ] **Step 4: Run the FFI tests**
 
 Run: `cargo test --lib ffi::`
-Expected: 21 passed.
+Expected: 20 passed (16 existing, 4 new).
 
 - [ ] **Step 5: Check the Swift bindings generate**
 
-Run: `./scripts/build-swift.sh --generate-only > /tmp/bindgen.log 2>&1; tail -5 /tmp/bindgen.log; grep -n "func companionFiles\|func renamedCompanions\|func resolveReference\|relatedFiles(baseDir" Sources/CooklangFind/*.swift | head`
-Expected: the four symbols appear. Then `git checkout -- Sources/` so the generated file is not committed (release CI regenerates it).
+Run: `./scripts/build-swift.sh --generate-only > /tmp/bindgen.log 2>&1; tail -5 /tmp/bindgen.log; grep -n "func companionFiles\|func renamedCompanions\|func resolveReference\|relatedFiles(baseDir" bindings/swift/Sources/CooklangFind/CooklangFind.swift | head`
+Expected: the four symbols appear. The script writes under `bindings/swift/`, which is git-ignored; the committed `Sources/CooklangFind` is regenerated by the release workflow, so do not touch it.
 
 - [ ] **Step 6: Lint and commit**
 
-Run: `make lint`
+Run: `cargo fmt && make lint`
 
 ```bash
 git add src/ffi.rs
@@ -1814,7 +1873,7 @@ git commit -m "docs: companion files, references and the image numbering rule"
 
 - [ ] **Step 1: Full test and lint**
 
-Run: `cargo test > /tmp/cooklang-find-tests.log 2>&1; tail -15 /tmp/cooklang-find-tests.log; make lint`
+Run: `cargo test > /tmp/cooklang-find-tests.log 2>&1; tail -15 /tmp/cooklang-find-tests.log; cargo fmt && make lint`
 Expected: every suite `test result: ok`; lint clean. Also `cargo build --no-default-features` must succeed (Rust-only consumers).
 
 - [ ] **Step 2: Confirm nothing still reads the old shapes**

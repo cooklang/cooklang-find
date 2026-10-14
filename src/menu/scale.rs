@@ -2,8 +2,8 @@
 //! per the Cooklang spec's "Scaling Referenced Recipes".
 
 use super::model::{Menu, MenuItem};
-use crate::fetcher::get_recipe;
-use crate::model::Metadata;
+use crate::model::{Metadata, RecipeEntry};
+use crate::reference::resolve_reference;
 use camino::Utf8Path;
 use serde_yaml::Value;
 use std::collections::HashMap;
@@ -30,11 +30,11 @@ impl Menu {
     /// must pass as a finite number greater than 0.
     ///
     /// Reference paths are resolved against `base_dirs` (the library root),
-    /// not the menu's own folder: `@./Mains/Stew` is looked up as
-    /// `<base_dir>/Mains/Stew.cook`, then `<base_dir>/Mains/Stew.menu`, in
-    /// each base dir in turn; `@./Weekly.menu` is looked up as
-    /// `<base_dir>/Weekly.menu`. A recipe is only loaded when the result depends
-    /// on it (a numeric target with a unit), at most once per call.
+    /// not the menu's own folder, with [`resolve_reference`]: `@./Mains/Stew`
+    /// is looked up as `<base_dir>/Mains/Stew.cook`, then `.menu`, in each
+    /// base dir in turn; `@./Weekly.menu` as `<base_dir>/Weekly.menu`. A
+    /// recipe is only loaded when the result depends on it (a numeric target
+    /// with a unit), at most once per call.
     pub fn resolve_scales<P: AsRef<Utf8Path>>(&mut self, base_dirs: &[P], menu_scale: f64) {
         let mut sizes: HashMap<String, RecipeSize> = HashMap::new();
         let items = self
@@ -72,31 +72,17 @@ struct RecipeSize {
 }
 
 impl RecipeSize {
-    /// Loads `<path>.cook`, then `<path>.menu`, from each base dir in turn;
-    /// a path already ending in `.menu` in any case (`@./Weekly.menu{}`) is
-    /// loaded as-is.
-    ///
-    /// The extension is appended explicitly (rather than letting
-    /// `get_recipe` guess) so a dotted name like `Mr. Smith's Stew` is not
-    /// mistaken for one with an extension.
+    /// Resolves `path` with [`resolve_reference`] in each base dir in turn
+    /// and reads the first match's metadata; a missing recipe is a default
+    /// (raw-multiplier) size.
     fn load<P: AsRef<Utf8Path>>(base_dirs: &[P], path: &str) -> Self {
-        let candidates = if crate::walk::has_extension(Utf8Path::new(path), "menu") {
-            vec![path.to_string()]
-        } else {
-            vec![format!("{path}.cook"), format!("{path}.menu")]
-        };
         base_dirs
             .iter()
-            .flat_map(|dir| {
-                candidates
-                    .iter()
-                    .map(move |file| (dir.as_ref(), Utf8Path::new(file)))
-            })
-            .find_map(|(dir, file)| get_recipe([dir], file).ok())
+            .find_map(|dir| resolve_reference(dir.as_ref(), path))
+            .and_then(|file| RecipeEntry::from_path(file).ok())
             .map(|entry| Self::from_metadata(entry.metadata()))
             .unwrap_or_default()
     }
-
     fn from_metadata(metadata: &Metadata) -> Self {
         RecipeSize {
             servings: metadata.get("servings").and_then(value_number),
@@ -548,6 +534,24 @@ mod tests {
         assert_eq!(
             resolve("@./Weekly.MENU{4%servings}", &dir, 1.0),
             vec![Some(2.0)]
+        );
+    }
+
+    #[test]
+    fn explicit_cook_suffix_in_any_case_is_looked_up_once() {
+        let (_t, dir) = recipes_dir();
+        assert_eq!(
+            resolve("@./Pancakes.COOK{4%servings}", &dir, 1.0),
+            vec![Some(2.0)]
+        );
+    }
+
+    #[test]
+    fn reference_escaping_the_root_is_missing() {
+        let (_t, dir) = recipes_dir();
+        assert_eq!(
+            resolve("@../Pancakes{4%servings}", &dir, 1.0),
+            vec![Some(4.0)]
         );
     }
 }

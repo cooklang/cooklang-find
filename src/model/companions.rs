@@ -7,7 +7,8 @@
 //!
 //! `N` and `S` are one-based plain decimals, no leading zero. `ext` is one
 //! of [`IMAGE_EXTENSIONS`], in any ASCII case. `Name` is the recipe file's
-//! stem, so `Dr.Cook.cook` owns `Dr.Cook.jpg`. Referenced recipes are never companions.
+//! stem, so `Dr.Cook.cook` owns `Dr.Cook.jpg`. Referenced recipes are
+//! never companions.
 
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
@@ -121,7 +122,10 @@ pub struct RenamedFile {
 /// is at `to` (another name, folder or extension): the old stem is
 /// replaced by the new one, in `to`'s folder. Pure path arithmetic after
 /// one folder scan; nothing at the destination is checked, and the recipe
-/// file itself is not listed. Empty when `from == to`.
+/// file itself is not listed. A companion that would stay where it is
+/// (same stem, same folder, as in a `.cook` → `.menu` rename) is not
+/// listed, so the list is empty when `from == to`. Rows come in
+/// [`companion_files`] order.
 pub fn renamed_companions(from: &Utf8Path, to: &Utf8Path) -> Vec<RenamedFile> {
     if from == to {
         return Vec::new();
@@ -135,10 +139,8 @@ pub fn renamed_companions(from: &Utf8Path, to: &Utf8Path) -> Vec<RenamedFile> {
         .into_iter()
         .filter_map(|path| {
             let rest = path.file_name()?.strip_prefix(old_stem)?;
-            Some(RenamedFile {
-                to: new_dir.join(format!("{new_stem}{rest}")),
-                from: path,
-            })
+            let to = new_dir.join(format!("{new_stem}{rest}"));
+            (to != path).then_some(RenamedFile { from: path, to })
         })
         .collect()
 }
@@ -328,5 +330,27 @@ mod tests {
         assert!(renamed_companions(&recipe, &recipe).is_empty());
         let bare = touch(&dir, "Bare.cook");
         assert!(renamed_companions(&bare, &dir.join("Other.cook")).is_empty());
+    }
+
+    #[test]
+    fn extension_change_alone_moves_nothing() {
+        let (_t, dir) = root();
+        let recipe = touch(&dir, "Pasta.cook");
+        touch(&dir, "Pasta.jpg");
+        assert!(renamed_companions(&recipe, &dir.join("Pasta.menu")).is_empty());
+    }
+
+    #[test]
+    fn dotted_stem_is_swapped_whole() {
+        let (_t, dir) = root();
+        let recipe = touch(&dir, "Dr.Cook.cook");
+        touch(&dir, "Dr.Cook.2.jpg");
+        assert_eq!(
+            pairs(&renamed_companions(&recipe, &dir.join("Dr.Who.cook"))),
+            vec![(
+                dir.join("Dr.Cook.2.jpg").to_string(),
+                dir.join("Dr.Who.2.jpg").to_string()
+            )]
+        );
     }
 }

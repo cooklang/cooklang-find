@@ -1,0 +1,201 @@
+//! The files that belong to a recipe by naming convention, found by one
+//! listing of its folder:
+//!
+//! - `Name.ext` — the title image
+//! - `Name.N.ext` — step N of a recipe without sections
+//! - `Name.S.N.ext` — section S, step N
+//!
+//! `N` and `S` are one-based. `ext` is one of [`IMAGE_EXTENSIONS`], in any
+//! ASCII case. `Name` is the recipe file's stem, so `Dr.Cook.cook` owns
+//! `Dr.Cook.jpg`. Referenced recipes are never companions.
+
+use camino::{Utf8Path, Utf8PathBuf};
+use std::fs;
+
+/// Image extensions a recipe's companions may have, in preference order
+/// when one slot has several files. Matched ignoring ASCII case.
+pub const IMAGE_EXTENSIONS: [&str; 5] = ["jpg", "jpeg", "png", "webp", "heic"];
+
+/// Which companion a file is. Ordered: title, then linear steps, then
+/// sectioned steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Slot {
+    Title,
+    Linear(usize),
+    Sectioned(usize, usize),
+}
+
+/// Lists the recipe's folder once and returns every companion with its
+/// slot, sorted by slot, then by extension preference, then by file name.
+/// Files whose names start with `.` are skipped. A folder that cannot be
+/// read, or a path without a parent or stem, gives an empty list.
+pub(crate) fn scan(recipe_path: &Utf8Path) -> Vec<(Slot, Utf8PathBuf)> {
+    let (Some(dir), Some(stem)) = (recipe_path.parent(), recipe_path.file_stem()) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(Slot, usize, Utf8PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            if name.starts_with('.') {
+                return None;
+            }
+            let (slot, rank) = classify(&name, stem)?;
+            let path = dir.join(&name);
+            path.is_file().then_some((slot, rank, path))
+        })
+        .collect();
+    found.sort();
+    found
+        .into_iter()
+        .map(|(slot, _, path)| (slot, path))
+        .collect()
+}
+
+/// `Name.ext` → `Title`, `Name.N.ext` → `Linear(N)`, `Name.S.N.ext` →
+/// `Sectioned(S, N)`, with the extension's rank in [`IMAGE_EXTENSIONS`].
+fn classify(file_name: &str, stem: &str) -> Option<(Slot, usize)> {
+    let rest = file_name.strip_prefix(stem)?.strip_prefix('.')?;
+    let (numbers, ext) = match rest.rsplit_once('.') {
+        Some((numbers, ext)) => (Some(numbers), ext),
+        None => (None, rest),
+    };
+    let rank = IMAGE_EXTENSIONS
+        .iter()
+        .position(|e| e.eq_ignore_ascii_case(ext))?;
+    let slot = match numbers {
+        None => Slot::Title,
+        Some(numbers) => {
+            let numbers: Vec<usize> = numbers
+                .split('.')
+                .map(|n| n.parse::<usize>().ok().filter(|&n| n >= 1))
+                .collect::<Option<_>>()?;
+            match numbers[..] {
+                [step] => Slot::Linear(step),
+                [section, step] => Slot::Sectioned(section, step),
+                _ => return None,
+            }
+        }
+    };
+    Some((slot, rank))
+}
+
+/// The title image and every step and section image next to `recipe_path`,
+/// as absolute paths: title first, then linear steps by step, then sectioned
+/// images by section and step. Several files for one slot (`Name.jpg` and
+/// `Name.PNG`) are all returned, in [`IMAGE_EXTENSIONS`] order. Never a
+/// referenced recipe. Opens no file; see [`scan`] for what yields an empty
+/// list.
+pub fn companion_files(recipe_path: &Utf8Path) -> Vec<Utf8PathBuf> {
+    scan(recipe_path)
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn root() -> (TempDir, Utf8PathBuf) {
+        let temp = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        (temp, dir)
+    }
+
+    fn touch(dir: &Utf8Path, name: &str) -> Utf8PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, "").unwrap();
+        path
+    }
+
+    fn names(paths: &[Utf8PathBuf]) -> Vec<&str> {
+        paths.iter().map(|p| p.file_name().unwrap()).collect()
+    }
+
+    #[test]
+    fn classifies_title_linear_and_sectioned() {
+        assert_eq!(classify("Pasta.jpg", "Pasta"), Some((Slot::Title, 0)));
+        assert_eq!(classify("Pasta.3.PNG", "Pasta"), Some((Slot::Linear(3), 2)));
+        assert_eq!(
+            classify("Pasta.2.4.heic", "Pasta"),
+            Some((Slot::Sectioned(2, 4), 4))
+        );
+        assert_eq!(
+            classify("Dr.Cook.1.jpg", "Dr.Cook"),
+            Some((Slot::Linear(1), 0))
+        );
+    }
+
+    #[test]
+    fn rejects_other_files() {
+        assert_eq!(classify("Pasta.cook", "Pasta"), None);
+        assert_eq!(classify("Pasta.gif", "Pasta"), None);
+        assert_eq!(classify("Pasta.0.jpg", "Pasta"), None);
+        assert_eq!(classify("Pasta.1.2.3.jpg", "Pasta"), None);
+        assert_eq!(classify("Pasta.a.jpg", "Pasta"), None);
+        assert_eq!(classify("Pasta Salad.jpg", "Pasta"), None);
+        assert_eq!(classify("Pasta.Salad.jpg", "Pasta"), None);
+        assert_eq!(classify("pasta.jpg", "Pasta"), None);
+    }
+
+    #[test]
+    fn lists_in_slot_then_extension_order() {
+        let (_t, dir) = root();
+        let recipe = touch(&dir, "Pasta.cook");
+        touch(&dir, "Pasta.2.1.webp");
+        touch(&dir, "Pasta.2.jpg");
+        touch(&dir, "Pasta.PNG");
+        touch(&dir, "Pasta.jpg");
+        touch(&dir, "Pasta.1.JPEG");
+        touch(&dir, "Pasta.1.2.png");
+        touch(&dir, "Pasta Salad.jpg");
+        touch(&dir, ".Pasta.jpg");
+        touch(&dir, "Pasta.gif");
+
+        assert_eq!(
+            names(&companion_files(&recipe)),
+            vec![
+                "Pasta.jpg",
+                "Pasta.PNG",
+                "Pasta.1.JPEG",
+                "Pasta.2.jpg",
+                "Pasta.1.2.png",
+                "Pasta.2.1.webp",
+            ]
+        );
+    }
+
+    #[test]
+    fn dotted_recipe_name() {
+        let (_t, dir) = root();
+        let recipe = touch(&dir, "Dr.Cook.cook");
+        touch(&dir, "Dr.Cook.jpg");
+        touch(&dir, "Dr.Cook.1.jpg");
+        touch(&dir, "Dr.jpg");
+        assert_eq!(
+            names(&companion_files(&recipe)),
+            vec!["Dr.Cook.jpg", "Dr.Cook.1.jpg"]
+        );
+    }
+
+    #[test]
+    fn empty_when_nothing_matches_or_folder_is_missing() {
+        let (_t, dir) = root();
+        let recipe = touch(&dir, "Pasta.cook");
+        assert!(companion_files(&recipe).is_empty());
+        assert!(companion_files(&dir.join("gone/Pasta.cook")).is_empty());
+    }
+
+    #[test]
+    fn folders_are_not_companions() {
+        let (_t, dir) = root();
+        let recipe = touch(&dir, "Pasta.cook");
+        fs::create_dir(dir.join("Pasta.jpg")).unwrap();
+        assert!(companion_files(&recipe).is_empty());
+    }
+}

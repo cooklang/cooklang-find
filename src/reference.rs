@@ -7,6 +7,8 @@
 //! lexer breaks a word at `.` and `/` and so never accepts a braceless
 //! `@./Pesto`; do not "fix" it to match the parser.
 
+use std::collections::HashSet;
+
 /// The component after an `@`.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Component<'a> {
@@ -91,6 +93,37 @@ pub(crate) fn is_reference(name: &str) -> bool {
     name.starts_with("./") || name.starts_with("../")
 }
 
+/// The recipe references in `content`, in order of first appearance,
+/// deduplicated, as written (`./sauces/Hollandaise`, `../Pesto`).
+///
+/// Scans line by line with [`component`], so a name never spans lines, and
+/// stops a line at `--` (a comment).
+#[allow(dead_code)] // wired into related_files in a later commit
+pub(crate) fn extract_references(content: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut refs = Vec::new();
+    for line in content.lines() {
+        let mut i = 0;
+        while i < line.len() {
+            let rest = &line[i..];
+            if rest.starts_with("--") {
+                break;
+            }
+            if let Some(body) = rest.strip_prefix('@') {
+                if let Some(c) = component(body) {
+                    if is_reference(c.name) && seen.insert(c.name.to_string()) {
+                        refs.push(c.name.to_string());
+                    }
+                    i += 1 + c.len;
+                    continue;
+                }
+            }
+            i += rest.chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    refs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,6 +142,7 @@ mod tests {
                 len: "./Pesto Sauce{100%g}".len()
             })
         );
+        assert_eq!(name("./Pesto {2}"), Some("./Pesto"));
     }
 
     #[test]
@@ -116,6 +150,7 @@ mod tests {
         assert_eq!(name("./Dr.Cook and more"), Some("./Dr.Cook"));
         assert_eq!(name("./Sunday.menu"), Some("./Sunday.menu"));
         assert_eq!(name("./Pesto Sauce"), Some("./Pesto"));
+        assert_eq!(name("./Pesto, then"), Some("./Pesto"));
     }
 
     #[test]
@@ -126,6 +161,8 @@ mod tests {
     #[test]
     fn another_component_before_the_brace_forces_single_word() {
         assert_eq!(name("./Pesto Sauce and @salt{}"), Some("./Pesto"));
+        assert_eq!(name("./Pesto #pan{} x{}"), Some("./Pesto"));
+        assert_eq!(name("./Pesto -- x{}"), Some("./Pesto"));
     }
 
     #[test]
@@ -147,8 +184,61 @@ mod tests {
     }
 
     #[test]
-    fn comment_marker_is_not_a_component() {
+    fn nothing_word_like_is_not_a_component() {
         assert_eq!(component("-- note"), None);
         assert_eq!(component(" noon"), None);
+    }
+
+    #[test]
+    fn is_reference_needs_a_dot_slash_prefix() {
+        assert!(is_reference("./x"));
+        assert!(is_reference("../x"));
+        assert!(!is_reference("x"));
+        assert!(!is_reference(".x"));
+    }
+
+    #[test]
+    fn extracts_braced_and_bare_references_in_order() {
+        let refs = extract_references(
+            "Serve @./sauces/Hollandaise{150%g} with @./sides/Asparagus{200%g}.\nThen @../base/Stock.",
+        );
+        assert_eq!(
+            refs,
+            vec!["./sauces/Hollandaise", "./sides/Asparagus", "../base/Stock"]
+        );
+    }
+
+    #[test]
+    fn ignores_plain_ingredients_and_deduplicates() {
+        let refs = extract_references(
+            "Add @salt{1%tsp}. Use @./base/Stock{100%ml} twice and @./base/Stock{200%ml} again.",
+        );
+        assert_eq!(refs, vec!["./base/Stock"]);
+    }
+
+    #[test]
+    fn multi_word_and_dotted_names() {
+        assert_eq!(
+            extract_references("@./Pesto Sauce{100%g} @./Dr.Cook{} @./Sunday.menu"),
+            vec!["./Pesto Sauce", "./Dr.Cook", "./Sunday.menu"]
+        );
+    }
+
+    #[test]
+    fn scans_line_by_line() {
+        // A brace on the next line never joins the name on this one.
+        assert_eq!(extract_references("@./Pesto\nthen {stir}"), vec!["./Pesto"]);
+        assert_eq!(
+            extract_references("Add @./Pesto Sauce and @salt{}"),
+            vec!["./Pesto"]
+        );
+    }
+
+    #[test]
+    fn comments_are_skipped() {
+        assert_eq!(
+            extract_references("@./Pesto{} -- was @./Old{}\n@-- not a modifier"),
+            vec!["./Pesto"]
+        );
     }
 }

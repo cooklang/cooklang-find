@@ -9,8 +9,8 @@ A Rust library for finding and managing [Cooklang](https://cooklang.org/) recipe
 - **Metadata Support**: Parse and access recipe metadata using the new frontmatter format
 - **Title Image Support**: Automatically find and associate images with recipes
 - **Structured Menus**: Parse `.menu` meal plans into days, meals, and items, with recipe reference scaling
-- Companion files: the title and step images that belong to a recipe, and where they go on a rename
-- Recipe references (`@./path`) resolved with one root-relative rule
+- **Companion Files**: The title and step images that belong to a recipe, and where they go on a rename
+- **Recipe References**: `@./path` references resolved with one root-relative rule
 - **Error Handling**: Comprehensive error handling with custom error types
 
 ## Installation
@@ -287,9 +287,8 @@ let pesto = resolve_reference(root, "./sauces/Pesto");
 
 // Everything a recipe depends on, recursively: images, referenced recipes
 // and menus, and theirs.
-let recipe = RecipeEntry::from_path(Utf8PathBuf::from("recipes/Pasta.cook"))?;
+let recipe = RecipeEntry::from_path(Utf8PathBuf::from("recipes/Pasta.cook")).expect("recipe file");
 let files = recipe.related_files(root);
-# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ## Recipe Format

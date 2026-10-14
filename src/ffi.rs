@@ -863,8 +863,9 @@ pub fn count_recipes(dir: String) -> Result<u32, CooklangError> {
 /// Lists the images that belong to the recipe at `recipe_path`: `Name.ext`
 /// (title), `Name.N.ext` (step N, no sections) and `Name.S.N.ext` (section
 /// S, step N), one-based, extensions jpg/jpeg/png/webp/heic in any case.
-/// Title first, then `Name.N.ext` by step, then `Name.S.N.ext` by section and step; every extension variant of a slot
-/// is included. Opens no file. Empty when the folder cannot be read.
+/// Title first, then `Name.N.ext` by step, then `Name.S.N.ext` by section and
+/// step; every extension variant of a slot is included. Opens no file. Empty
+/// when the folder cannot be read.
 #[uniffi::export]
 pub fn companion_files(recipe_path: String) -> Vec<String> {
     companion_files_internal(Utf8Path::new(&recipe_path))

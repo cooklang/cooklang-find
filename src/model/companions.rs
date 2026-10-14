@@ -261,6 +261,9 @@ mod tests {
         assert!(companion_files(&recipe).is_empty());
     }
 
+    /// Serialises tests that change the process working directory. Any future
+    /// test that resolves a relative path must take this lock too, or it will
+    /// flake under the parallel test runner.
     static CWD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
@@ -311,13 +314,13 @@ mod tests {
         let (_t, dir) = root();
         let recipe = touch(&dir, "Pasta.cook");
         touch(&dir, "Pasta.1.jpg");
-        let target = dir.join("Mains/Pasta Bake.menu");
+        let target = dir.join("Mains").join("Pasta Bake.menu");
         let renamed = renamed_companions(&recipe, &target);
         assert_eq!(
             pairs(&renamed),
             vec![(
                 dir.join("Pasta.1.jpg").to_string(),
-                dir.join("Mains/Pasta Bake.1.jpg").to_string()
+                dir.join("Mains").join("Pasta Bake.1.jpg").to_string()
             )]
         );
     }

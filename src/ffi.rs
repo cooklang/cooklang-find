@@ -1304,12 +1304,18 @@ mod tests {
         fs::write(format!("{temp_path}/Pasta.1.2.png"), b"").unwrap();
 
         let expected = vec![
-            format!("{temp_path}/Pasta.JPG"),
-            format!("{temp_path}/Pasta.1.2.png"),
+            Utf8Path::new(temp_path).join("Pasta.JPG").to_string(),
+            Utf8Path::new(temp_path).join("Pasta.1.2.png").to_string(),
         ];
         assert_eq!(companion_files(path.clone()), expected);
         assert_eq!(recipe_from_path(path).unwrap().companion_files(), expected);
-        assert!(companion_files(format!("{temp_path}/missing/X.cook")).is_empty());
+        assert!(companion_files(
+            Utf8Path::new(temp_path)
+                .join("missing")
+                .join("X.cook")
+                .to_string()
+        )
+        .is_empty());
     }
 
     #[test]
@@ -1319,21 +1325,30 @@ mod tests {
         let path = create_test_recipe(temp_path, "Pasta", "Boil");
         fs::write(format!("{temp_path}/Pasta.1.jpg"), b"").unwrap();
 
-        let renamed = renamed_companions(path, format!("{temp_path}/Noodles.cook"));
+        let renamed = renamed_companions(
+            path,
+            Utf8Path::new(temp_path).join("Noodles.cook").to_string(),
+        );
         assert_eq!(renamed.len(), 1);
-        assert_eq!(renamed[0].from, format!("{temp_path}/Pasta.1.jpg"));
-        assert_eq!(renamed[0].to, format!("{temp_path}/Noodles.1.jpg"));
+        assert_eq!(
+            renamed[0].from,
+            Utf8Path::new(temp_path).join("Pasta.1.jpg").to_string()
+        );
+        assert_eq!(
+            renamed[0].to,
+            Utf8Path::new(temp_path).join("Noodles.1.jpg").to_string()
+        );
     }
 
     #[test]
     fn test_resolve_reference_ffi() {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path().to_str().unwrap();
-        let pesto = create_test_recipe(temp_path, "Pesto", "Blend");
+        create_test_recipe(temp_path, "Pesto", "Blend");
 
         assert_eq!(
             resolve_reference(temp_path.to_string(), "./Pesto".to_string()),
-            Some(pesto)
+            Some(Utf8Path::new(temp_path).join("Pesto.cook").to_string())
         );
         assert_eq!(
             resolve_reference(temp_path.to_string(), "../Pesto".to_string()),
@@ -1352,11 +1367,11 @@ mod tests {
         let recipe = recipe_from_path(path).unwrap();
         assert_eq!(
             recipe.get_step_image(0, 2),
-            Some(format!("{temp_path}/Pasta.2.jpg"))
+            Some(Utf8Path::new(temp_path).join("Pasta.2.jpg").to_string())
         );
         assert_eq!(
             recipe.get_step_image(1, 2),
-            Some(format!("{temp_path}/Pasta.1.2.jpg"))
+            Some(Utf8Path::new(temp_path).join("Pasta.1.2.jpg").to_string())
         );
         let sections: Vec<u32> = recipe
             .step_images()

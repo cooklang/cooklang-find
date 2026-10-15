@@ -2292,7 +2292,10 @@ public enum FfiMenuItem: Equatable, Hashable {
     /**
      * A reference to another recipe
      */
-    case recipeReference(name: String, path: String, quantity: String?, unit: String?, scale: Double?
+    case recipeReference(name: String, path: String, quantity: String?, unit: String?, scale: Double?, 
+        /**
+         * Marked optional (`@?./Desserts/Cake{}`)
+         */optional: Bool
     )
     /**
      * A loose ingredient
@@ -2334,7 +2337,7 @@ public struct FfiConverterTypeFfiMenuItem: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
         
-        case 1: return .recipeReference(name: try FfiConverterString.read(from: &buf), path: try FfiConverterString.read(from: &buf), quantity: try FfiConverterOptionString.read(from: &buf), unit: try FfiConverterOptionString.read(from: &buf), scale: try FfiConverterOptionDouble.read(from: &buf)
+        case 1: return .recipeReference(name: try FfiConverterString.read(from: &buf), path: try FfiConverterString.read(from: &buf), quantity: try FfiConverterOptionString.read(from: &buf), unit: try FfiConverterOptionString.read(from: &buf), scale: try FfiConverterOptionDouble.read(from: &buf), optional: try FfiConverterBool.read(from: &buf)
         )
         
         case 2: return .ingredient(name: try FfiConverterString.read(from: &buf), quantity: try FfiConverterOptionString.read(from: &buf), unit: try FfiConverterOptionString.read(from: &buf)
@@ -2356,13 +2359,14 @@ public struct FfiConverterTypeFfiMenuItem: FfiConverterRustBuffer {
         switch value {
         
         
-        case let .recipeReference(name,path,quantity,unit,scale):
+        case let .recipeReference(name,path,quantity,unit,scale,optional):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(name, into: &buf)
             FfiConverterString.write(path, into: &buf)
             FfiConverterOptionString.write(quantity, into: &buf)
             FfiConverterOptionString.write(unit, into: &buf)
             FfiConverterOptionDouble.write(scale, into: &buf)
+            FfiConverterBool.write(optional, into: &buf)
             
         
         case let .ingredient(name,quantity,unit):

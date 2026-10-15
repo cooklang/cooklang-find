@@ -69,6 +69,9 @@ pub enum MenuItem {
         /// Multiplier for the referenced recipe; `None` until
         /// [`Menu::resolve_scales`] runs.
         scale: Option<f64>,
+        /// Marked optional (`@?./Desserts/Cake{}`): a choice offered, not a
+        /// dish to cook or shop for unless someone takes it up.
+        optional: bool,
     },
     /// A loose ingredient written directly in the menu.
     Ingredient {
@@ -153,6 +156,7 @@ mod tests {
             quantity: None,
             unit: None,
             scale: None,
+            optional: false,
         }
     }
 

@@ -254,10 +254,15 @@ fn push_text(text: &str, items: &mut Vec<MenuItem>) {
 
 /// Parses the component after an `@`, returning it and the bytes consumed.
 fn parse_component(s: &str) -> Option<(MenuItem, usize)> {
-    let Component { name, amount, len } = component(s)?;
+    let Component {
+        name,
+        amount,
+        len,
+        optional,
+    } = component(s)?;
     let (quantity, unit) = split_amount(amount);
     let item = if is_reference(name) {
-        recipe_reference(name, quantity, unit)?
+        recipe_reference(name, quantity, unit, optional)?
     } else if name.is_empty() {
         return None;
     } else {
@@ -292,6 +297,7 @@ fn recipe_reference(
     name: &str,
     quantity: Option<String>,
     unit: Option<String>,
+    optional: bool,
 ) -> Option<MenuItem> {
     let path = name.strip_prefix("./").unwrap_or(name);
     let path = path.strip_suffix(".cook").unwrap_or(path);
@@ -305,6 +311,7 @@ fn recipe_reference(
         quantity,
         unit,
         scale: None,
+        optional,
     })
 }
 
@@ -335,6 +342,7 @@ mod tests {
             quantity: quantity.map(str::to_string),
             unit: unit.map(str::to_string),
             scale: None,
+            optional: false,
         }
     }
 
@@ -447,6 +455,21 @@ mod tests {
                 ingredient("parsley", None, None),
                 reference("Sauce", None, None),
             ]
+        );
+    }
+
+    #[test]
+    fn optional_reference_is_marked() {
+        let optional = |path: &str| {
+            let mut item = reference(path, None, None);
+            if let MenuItem::RecipeReference { optional, .. } = &mut item {
+                *optional = true;
+            }
+            item
+        };
+        assert_eq!(
+            scan("@?./Desserts/Cake{} or @?./Pie"),
+            vec![optional("Desserts/Cake"), text(" or "), optional("Pie")]
         );
     }
 

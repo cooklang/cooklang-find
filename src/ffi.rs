@@ -489,6 +489,8 @@ pub enum FfiMenuItem {
         quantity: Option<String>,
         unit: Option<String>,
         scale: Option<f64>,
+        /// Marked optional (`@?./Desserts/Cake{}`)
+        optional: bool,
     },
     /// A loose ingredient
     Ingredient {
@@ -513,12 +515,14 @@ impl From<&MenuItem> for FfiMenuItem {
                 quantity,
                 unit,
                 scale,
+                optional,
             } => FfiMenuItem::RecipeReference {
                 name,
                 path,
                 quantity,
                 unit,
                 scale,
+                optional,
             },
             MenuItem::Ingredient {
                 name,

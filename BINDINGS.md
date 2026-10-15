@@ -419,7 +419,7 @@ If you use ProGuard/R8, the AAR includes consumer rules. If needed manually:
 
 | Variant | Fields | Description |
 |---------|--------|-------------|
-| `RecipeReference` | `name`, `path`, `quantity?`, `unit?`, `scale: Double?` | `@./Folder/Recipe{2}`; `path` is relative to the library root, with `./` and `.cook` stripped (a `.menu` suffix is kept); to load it, pass `path` to `resolveReference(baseDir, path)`; do not append `.cook` by hand or pass it to `getRecipe`, which mis-detects an extension in dotted names such as "Mr. Smith's Stew"; `scale` is set by `parseMenu` |
+| `RecipeReference` | `name`, `path`, `quantity?`, `unit?`, `scale: Double?`, `optional: Bool` | `@./Folder/Recipe{2}`; `path` is relative to the library root, with `./` and `.cook` stripped (a `.menu` suffix is kept); to load it, pass `path` to `resolveReference(baseDir, path)`; do not append `.cook` by hand or pass it to `getRecipe`, which mis-detects an extension in dotted names such as "Mr. Smith's Stew"; `scale` is set by `parseMenu`; `optional` is true for `@?./Recipe{}` |
 | `Ingredient` | `name`, `quantity?`, `unit?` | A loose ingredient; quantity as written |
 | `Text` | `text` | Connecting text such as ` with ` |
 | `Note` | `text` | A `-- comment` |

@@ -24,12 +24,15 @@ pub(crate) struct Component<'a> {
     pub amount: Option<&'a str>,
     /// Bytes consumed from the body: modifier and trailing `(note)` included.
     pub len: usize,
+    /// Written with the `?` modifier (`@?./Cake{}`).
+    pub optional: bool,
 }
 
 /// Scans the component after an `@`, or `None` when the text after `@` is
 /// not one (a stray `@` before a comment, or nothing word-like).
 ///
-/// - A leading modifier (`?`, `+`, `-`, `&`) is skipped.
+/// - A leading modifier (`?`, `+`, `-`, `&`) is skipped; `?` is kept as
+///   [`Component::optional`].
 /// - Braced form: the name is everything before the first `{` (with a `}`
 ///   after it), trailing whitespace trimmed; a `(note)` right after the
 ///   braces is consumed. The text before `{` must not be empty, start with
@@ -66,6 +69,7 @@ pub(crate) fn component(body: &str) -> Option<Component<'_>> {
         name,
         amount,
         len: modifiers + len,
+        optional: body.starts_with('?'),
     })
 }
 
@@ -246,7 +250,8 @@ mod tests {
             Some(Component {
                 name: "./Pesto Sauce",
                 amount: Some("100%g"),
-                len: "./Pesto Sauce{100%g}".len()
+                len: "./Pesto Sauce{100%g}".len(),
+                optional: false,
             })
         );
         assert_eq!(name("./Pesto {2}"), Some("./Pesto"));
@@ -282,6 +287,8 @@ mod tests {
         let c = component("?./Pesto{}").unwrap();
         assert_eq!(c.name, "./Pesto");
         assert_eq!(c.len, "?./Pesto{}".len());
+        assert!(c.optional);
+        assert!(!component("&./Pesto{}").unwrap().optional);
     }
 
     #[test]

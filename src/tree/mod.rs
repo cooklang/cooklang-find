@@ -563,4 +563,34 @@ mod tests {
             .is_menu());
         assert_eq!(tree.recipe_count(), 2);
     }
+
+    #[test]
+    fn test_folder_recipe_and_menu_of_the_same_name_are_all_kept() {
+        // As a user's collection had it: only the menu was left, the folder
+        // filed under the recipe and both replaced by the menu.
+        let temp_dir = TempDir::new().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        fs::create_dir_all(root.join("Plats")).unwrap();
+        fs::write(root.join("Plats/Poulet.cook"), "Roast.").unwrap();
+        fs::write(root.join("Plats.cook"), "Simmer.").unwrap();
+        fs::write(root.join("Plats.menu"), "= Day 1").unwrap();
+
+        let tree = build_tree(&root).unwrap();
+
+        assert_eq!(tree.children.len(), 3);
+        assert_folder(&tree, "Plats", "Poulet");
+        assert_recipe(&tree, "Plats.cook", "Plats");
+        assert!(!tree.children["Plats.cook"]
+            .recipe
+            .as_ref()
+            .unwrap()
+            .is_menu());
+        assert_recipe(&tree, "Plats.menu", "Plats");
+        assert!(tree.children["Plats.menu"]
+            .recipe
+            .as_ref()
+            .unwrap()
+            .is_menu());
+        assert_eq!(tree.recipe_count(), 3);
+    }
 }

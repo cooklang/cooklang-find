@@ -124,23 +124,51 @@ pub fn build_tree<P: AsRef<Utf8Path>>(base_dir: P) -> Result<RecipeTree, TreeErr
             for component in components {
                 let name = component.to_string();
                 let path = current.path.join(&name);
+                make_room_for_folder(current, &name);
                 current = current
                     .children
                     .entry(name.clone())
                     .or_insert_with(|| RecipeTree::new(name, path));
             }
 
-            // Add the recipe as a leaf node
+            // Add the recipe as a leaf node, keyed by its name unless a folder
+            // or another recipe in this directory already has it.
             let name = recipe.name().clone().unwrap();
+            let key = if current.children.contains_key(&name) {
+                file_name_key(&path)
+            } else {
+                name.clone()
+            };
 
-            current.children.insert(
-                name.clone(),
-                RecipeTree::new_with_recipe(name, path, recipe),
-            );
+            current
+                .children
+                .insert(key, RecipeTree::new_with_recipe(name, path, recipe));
         }
     }
 
     Ok(root)
+}
+
+/// A folder is always keyed by its own name. A recipe that took the name
+/// first (`Week.menu` found before `Week/Monday.menu`) moves to its file
+/// name, the key it would have had if found second. Without this, the folder's
+/// recipes were filed under the recipe node, and a listing that tells folders
+/// from recipes by their children lost one or the other.
+fn make_room_for_folder(dir: &mut RecipeTree, name: &str) {
+    if dir
+        .children
+        .get(name)
+        .is_some_and(|node| node.recipe.is_some())
+    {
+        let recipe = dir.children.remove(name).expect("checked above");
+        dir.children.insert(file_name_key(&recipe.path), recipe);
+    }
+}
+
+/// The key of a recipe whose name is taken: its file name, which no other
+/// entry of the same directory can have.
+fn file_name_key(path: &Utf8Path) -> String {
+    path.file_name().unwrap_or_default().to_string()
 }
 
 #[cfg(test)]
@@ -451,5 +479,88 @@ mod tests {
         assert_eq!(names, vec!["U", "Week", "pie"]);
         assert!(tree.children["Week"].recipe.as_ref().unwrap().is_menu());
         assert_eq!(tree.recipe_count(), 3);
+    }
+
+    /// The folder `name` under `dir`, holding the recipe `inside`.
+    fn assert_folder(dir: &RecipeTree, name: &str, inside: &str) {
+        let folder = &dir.children[name];
+        assert!(folder.recipe.is_none(), "{name} must be the folder");
+        assert!(
+            folder.children[inside].recipe.is_some(),
+            "{name}/{inside} must be listed in the folder"
+        );
+    }
+
+    /// The recipe keyed `key` under `dir`, still named `name`.
+    fn assert_recipe(dir: &RecipeTree, key: &str, name: &str) {
+        let recipe = &dir.children[key];
+        assert_eq!(recipe.name, name);
+        assert!(recipe.recipe.is_some(), "{key} must be the recipe");
+        assert!(
+            recipe.children.is_empty(),
+            "nothing may be filed under {key}"
+        );
+    }
+
+    #[test]
+    fn test_folder_and_menu_of_the_same_name_are_both_kept() {
+        // A menu found next to the folder its days are in.
+        let temp_dir = TempDir::new().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        fs::create_dir_all(root.join("Plans/Week")).unwrap();
+        fs::write(root.join("Plans/Week.menu"), "= Day 1").unwrap();
+        fs::write(root.join("Plans/Week/Monday.menu"), "= Day 1").unwrap();
+
+        let tree = build_tree(&root).unwrap();
+
+        let plans = &tree.children["Plans"];
+        assert_eq!(plans.children.len(), 2);
+        assert_folder(plans, "Week", "Monday");
+        assert_recipe(plans, "Week.menu", "Week");
+        assert_eq!(tree.recipe_count(), 2);
+    }
+
+    #[test]
+    fn test_folder_keeps_its_name_whichever_is_found_first() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        // `.cook` files are found before `.menu` files: `Soup.cook` is a recipe
+        // before the folder `Soup/` exists, `Stew/Beef.cook` makes the folder
+        // `Stew/` before the menu `Stew.menu` is found.
+        fs::create_dir_all(root.join("Soup")).unwrap();
+        fs::create_dir_all(root.join("Stew")).unwrap();
+        fs::write(root.join("Soup.cook"), "Blend.").unwrap();
+        fs::write(root.join("Soup/Week.menu"), "= Day 1").unwrap();
+        fs::write(root.join("Stew/Beef.cook"), "Simmer.").unwrap();
+        fs::write(root.join("Stew.menu"), "= Day 1").unwrap();
+
+        let tree = build_tree(&root).unwrap();
+
+        assert_folder(&tree, "Soup", "Week");
+        assert_recipe(&tree, "Soup.cook", "Soup");
+        assert_folder(&tree, "Stew", "Beef");
+        assert_recipe(&tree, "Stew.menu", "Stew");
+        assert_eq!(tree.children.len(), 4);
+        assert_eq!(tree.recipe_count(), 4);
+    }
+
+    #[test]
+    fn test_recipe_and_menu_of_the_same_name_are_both_kept() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        fs::write(root.join("Pasta.cook"), "Boil.").unwrap();
+        fs::write(root.join("Pasta.menu"), "= Day 1").unwrap();
+
+        let tree = build_tree(&root).unwrap();
+
+        assert_recipe(&tree, "Pasta", "Pasta");
+        assert!(!tree.children["Pasta"].recipe.as_ref().unwrap().is_menu());
+        assert_recipe(&tree, "Pasta.menu", "Pasta");
+        assert!(tree.children["Pasta.menu"]
+            .recipe
+            .as_ref()
+            .unwrap()
+            .is_menu());
+        assert_eq!(tree.recipe_count(), 2);
     }
 }

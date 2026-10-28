@@ -18,6 +18,11 @@ use std::collections::HashMap;
 /// * `path` - The full filesystem path to this node
 /// * `recipe` - Optional recipe data if this node represents a recipe file
 /// * `children` - Child nodes indexed by their names
+///
+/// A folder and a recipe of the same directory can share a name (`Week/` and
+/// `Week.menu`), as can two recipes (`Pasta.cook` and `Pasta.menu`). The
+/// folder, or else the recipe found first, is keyed by the name; the other
+/// recipe by its file name (`Week.menu`). Its node's `name` is still `Week`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecipeTree {
     /// Name of the current node (directory name or recipe name)
@@ -26,7 +31,8 @@ pub struct RecipeTree {
     pub path: Utf8PathBuf,
     /// If this is a recipe, contains the Recipe struct
     pub recipe: Option<RecipeEntry>,
-    /// Child directories and recipes
+    /// Child directories and recipes, keyed by name, or by file name for a
+    /// recipe whose name another child of the directory already has
     pub children: HashMap<String, RecipeTree>,
 }
 

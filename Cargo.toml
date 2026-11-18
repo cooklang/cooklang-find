@@ -30,6 +30,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1.0"
 thiserror = "2"
+# Accent-insensitive search: decompose, then drop combining marks.
+unicode-normalization = "0.1"
 uniffi = { version = "0.32", optional = true }
 
 [dev-dependencies]

@@ -232,6 +232,12 @@ fn collect_value_candidates(value: &Value, out: &mut Vec<String>) {
     }
 }
 
+/// How many lines of front matter are read before giving up on a file whose opening `---` is
+/// never closed. Generous on purpose: a recipe that carries a full `nutrition:` table, a `file:`
+/// block and the like runs well past thirty lines, and a limit that small silently dropped all of
+/// its metadata (no title, no tags, no nutrition) from every listing.
+const MAX_FRONTMATTER_LINES: usize = 500;
+
 /// Parse YAML frontmatter from raw YAML content (without --- markers)
 /// Returns None if the content is empty or invalid YAML
 pub(crate) fn parse_yaml_content(yaml_content: &str) -> Option<Metadata> {
@@ -272,8 +278,8 @@ where
             )));
         }
         yaml_lines.push(line);
-        // Prevent reading too many lines
-        if yaml_lines.len() > 30 {
+        // Prevent reading a whole file that only starts with `---`
+        if yaml_lines.len() > MAX_FRONTMATTER_LINES {
             return Ok(None);
         }
     }
@@ -296,6 +302,32 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn metadata_of(lines: &[String]) -> Metadata {
+        extract_and_parse_metadata(lines.iter().map(|l| Ok::<_, ()>(l.clone()))).unwrap()
+    }
+
+    #[test]
+    fn front_matter_longer_than_thirty_lines_is_still_read() {
+        let mut lines: Vec<String> = ["---", "title: Long", "tags:", "  - a", "nutrition:"]
+            .map(String::from)
+            .into();
+        lines.extend((0..60).map(|n| format!("  key{n}: {n}")));
+        lines.push("---".to_string());
+        lines.push("Body.".to_string());
+
+        let metadata = metadata_of(&lines);
+        assert_eq!(metadata.title(), Some("Long"));
+        assert_eq!(metadata.tags(), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn a_front_matter_that_is_never_closed_is_given_up_on() {
+        let mut lines = vec!["---".to_string(), "title: Open".to_string()];
+        lines.extend((0..MAX_FRONTMATTER_LINES + 5).map(|n| format!("k{n}: {n}")));
+
+        assert_eq!(metadata_of(&lines).title(), None);
+    }
 
     #[test]
     fn test_parse_yaml_content() {

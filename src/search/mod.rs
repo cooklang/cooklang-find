@@ -9,6 +9,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use std::fs::File;
 use std::io::{self, BufReader};
 use thiserror::Error;
+use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 
 mod filter;
 mod model;
@@ -32,6 +33,28 @@ pub enum SearchError {
     IoError(#[from] std::io::Error),
 }
 
+/// Fold `text` into the form search compares: lowercased, with accents and
+/// other combining marks removed.
+///
+/// `"Crêpes"`, `"CREPES"` and `"crepes"` all fold to `"crepes"`, so a query
+/// typed without accents finds a recipe written with them, and the reverse.
+/// Text whose accents are stored as separate combining characters (NFD, as
+/// macOS file names are) folds the same as precomposed text (NFC).
+///
+/// Only marks are dropped: letters with no decomposition, such as `ø`, `ß`
+/// or `œ`, are kept as they are.
+///
+/// Public so that a caller filtering [`search`]'s results again can match the
+/// same way and not drop a recipe this crate matched.
+pub fn normalize_for_search(text: &str) -> String {
+    // Lowercase first: lowercasing can itself produce combining marks
+    // (`İ` becomes `i` + U+0307), which the filter then removes.
+    text.to_lowercase()
+        .nfd()
+        .filter(|c| !is_combining_mark(*c))
+        .collect()
+}
+
 /// Searches for recipes in a directory tree that match a query string.
 ///
 /// This function performs a comprehensive search through all .cook and .menu files
@@ -40,6 +63,8 @@ pub enum SearchError {
 /// 1. Searches for exact and partial filename matches (highest priority)
 /// 2. Searches for query terms within file contents
 /// 3. Scores and ranks results by relevance
+///
+/// Matching ignores case and accents; see [`normalize_for_search`].
 ///
 /// # Arguments
 ///
@@ -202,7 +227,7 @@ fn walk_recipe_paths(base_dir: &Utf8Path) -> Result<Vec<Utf8PathBuf>, SearchErro
 /// Search for .cook and .menu files in a directory and return scored results
 fn search_paths(base_dir: &Utf8Path, query: &str) -> Result<Vec<Utf8PathBuf>, SearchError> {
     let mut scored_results = vec![];
-    let query_lower = query.to_lowercase();
+    let query_lower = normalize_for_search(query);
     let terms: Vec<String> = query_lower.split_whitespace().map(String::from).collect();
 
     // Search for both .cook and .menu files
@@ -246,10 +271,10 @@ fn search_paths(base_dir: &Utf8Path, query: &str) -> Result<Vec<Utf8PathBuf>, Se
 
 /// Calculate score for filename matches
 fn score_filename_match(path: &Utf8Path, query: &str) -> f64 {
-    let query = query.to_lowercase();
+    let query = normalize_for_search(query);
     path.file_stem()
         .map(|name| {
-            let name = name.to_lowercase();
+            let name = normalize_for_search(name);
             if name == query {
                 20.0 // Highest score for exact match
             } else if name.contains(&query) {
@@ -285,7 +310,7 @@ fn count_matches(path: &Utf8Path, terms: &[String]) -> io::Result<usize> {
     let mut total_matches = 0;
 
     for line in lines_lossy(reader) {
-        let line = line?.to_lowercase();
+        let line = normalize_for_search(&line?);
         total_matches += terms
             .iter()
             .map(|term| line.matches(term).count())
@@ -367,6 +392,44 @@ mod tests {
         );
 
         temp_dir
+    }
+
+    #[test]
+    fn normalize_for_search_folds_case_and_accents() {
+        assert_eq!(normalize_for_search("Crêpes"), "crepes");
+        assert_eq!(normalize_for_search("CRÈME brûlée"), "creme brulee");
+        // NFD input (base letter + combining circumflex) folds the same way.
+        assert_eq!(normalize_for_search("Cre\u{302}pes"), "crepes");
+        // Letters without a decomposition are kept.
+        assert_eq!(normalize_for_search("Œuf Smørrebrød"), "œuf smørrebrød");
+    }
+
+    #[test]
+    fn search_ignores_accents_in_file_names_and_contents() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf()).unwrap();
+        create_test_recipe(&dir, "Crêpes", "Mix @farine{250%g} and @lait{50%cl}.");
+        create_test_recipe(&dir, "Gâteau", "Bake with @crème fraîche{20%cl}.");
+        create_test_recipe(&dir, "Cre\u{302}me NFD", "Whisk @œufs{3}.");
+
+        let names = |query: &str| -> Vec<String> {
+            let mut names: Vec<String> = search(&dir, query)
+                .unwrap()
+                .iter()
+                .map(|r| r.name().clone().unwrap())
+                .collect();
+            names.sort();
+            names
+        };
+
+        // Unaccented query, accented file name.
+        assert_eq!(names("crepes"), vec!["Crêpes"]);
+        // Unaccented query, accented contents.
+        assert_eq!(names("fraiche"), vec!["Gâteau"]);
+        // Accented query, NFD file name.
+        assert_eq!(names("crème"), vec!["Cre\u{302}me NFD", "Gâteau"]);
+        // A prefix spanning the accent matches all three.
+        assert_eq!(names("cr"), vec!["Cre\u{302}me NFD", "Crêpes", "Gâteau"]);
     }
 
     #[test]

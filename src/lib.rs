@@ -73,6 +73,7 @@ pub use menu::{
 pub use model::*;
 pub use reference::resolve_reference;
 pub use search::{
-    filter_by_metadata, search, search_with_filter, Condition, MetadataFilter, OneOrMany,
+    filter_by_metadata, normalize_for_search, search, search_with_filter, Condition,
+    MetadataFilter, OneOrMany,
 };
 pub use tree::{build_tree, count_recipes, list_dir, DirEntry, DirListing, RecipeTree};
